@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "file_index": 0,
+      "filepath": "tests/fixtures/sample_polyglot/app.py",
+      "code": "from router import create_app\n\n\ndef main():\n    app = create_app()\n    return app\n"
+    },
+    {
+      "file_index": 1,
+      "filepath": "tests/fixtures/sample_polyglot/router.ts",
+      "code": "import express from 'express'\n\nexport function registerRoutes(app: express.Express) {\n  app.get('/health', (_req, res) => {\n    res.json({ ok: true })\n  })\n}\n"
+    },
+    {
+      "file_index": 2,
+      "filepath": "tests/fixtures/sample_polyglot/main.go",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n"
+    }
+  ]
+}

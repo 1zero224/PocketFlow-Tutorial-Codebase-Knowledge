@@ -5,6 +5,15 @@ from pocketflow import Node, BatchNode
 from utils.crawl_github_files import crawl_github_files
 from utils.call_llm import call_llm
 from utils.crawl_local_files import crawl_local_files
+from utils.semantic_chunks import (
+    build_chunk_catalog,
+    build_chunk_inventory,
+    deterministic_plan_batches,
+    extract_file_indices,
+    format_chunks_for_prompt,
+    pack_chunks_for_prompt,
+    sort_files_items,
+)
 
 
 # Helper to get content for specific file indices
@@ -70,8 +79,8 @@ class FetchRepo(Node):
                 use_relative_paths=prep_res["use_relative_paths"]
             )
 
-        # Convert dict to list of tuples: [(path, content), ...]
-        files_list = list(result.get("files", {}).items())
+        # Convert dict to stable list of tuples: [(path, content), ...]
+        files_list = sort_files_items(result.get("files", {}).items())
         if len(files_list) == 0:
             raise (ValueError("Failed to fetch files"))
         print(f"Fetched {len(files_list)} files.")
@@ -89,144 +98,58 @@ class IdentifyAbstractions(Node):
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
         max_abstraction_num = shared.get("max_abstraction_num", 10)  # Get max_abstraction_num, default to 10
 
-        # Helper to create context from files, respecting limits (basic example)
-        def create_llm_context(files_data):
-            context = ""
-            file_info = []  # Store tuples of (index, path)
-            for i, (path, content) in enumerate(files_data):
-                entry = f"--- File Index {i}: {path} ---\n{content}\n\n"
-                context += entry
-                file_info.append((i, path))
+        chunk_inventory = build_chunk_inventory(files_data)
+        if not chunk_inventory:
+            raise ValueError("No semantic chunks were produced from fetched files")
 
-            return context, file_info  # file_info is list of (index, path)
-
-        context, file_info = create_llm_context(files_data)
-        # Format file info for the prompt (comment is just a hint for LLM)
-        file_listing_for_prompt = "\n".join(
-            [f"- {idx} # {path}" for idx, path in file_info]
-        )
-        return (
-            context,
-            file_listing_for_prompt,
-            len(files_data),
-            project_name,
-            language,
-            use_cache,
-            max_abstraction_num,
-        )  # Return all parameters
+        return {
+            "chunk_inventory": chunk_inventory,
+            "chunk_catalog": build_chunk_catalog(chunk_inventory),
+            "file_count": len(files_data),
+            "project_name": project_name,
+            "language": language,
+            "use_cache": use_cache,
+            "max_abstraction_num": max_abstraction_num,
+        }
 
     def exec(self, prep_res):
-        (
-            context,
-            file_listing_for_prompt,
-            file_count,
-            project_name,
-            language,
-            use_cache,
-            max_abstraction_num,
-        ) = prep_res  # Unpack all parameters
+        chunk_inventory = prep_res["chunk_inventory"]
+        chunk_catalog = prep_res["chunk_catalog"]
+        file_count = prep_res["file_count"]
+        project_name = prep_res["project_name"]
+        language = prep_res["language"]
+        use_cache = prep_res["use_cache"]
+        max_abstraction_num = prep_res["max_abstraction_num"]
+
         print(f"Identifying abstractions using LLM...")
 
-        # Add language instruction and hints only if not English
-        language_instruction = ""
-        name_lang_hint = ""
-        desc_lang_hint = ""
-        if language.lower() != "english":
-            language_instruction = f"IMPORTANT: Generate the `name` and `description` for each abstraction in **{language.capitalize()}** language. Do NOT use English for these fields.\n\n"
-            # Keep specific hints here as name/description are primary targets
-            name_lang_hint = f" (value in {language.capitalize()})"
-            desc_lang_hint = f" (value in {language.capitalize()})"
-
-        prompt = f"""
-For the project `{project_name}`:
-
-Codebase Context:
-{context}
-
-{language_instruction}Analyze the codebase context.
-Identify the top 5-{max_abstraction_num} core most important abstractions to help those new to the codebase.
-
-For each abstraction, provide:
-1. A concise `name`{name_lang_hint}.
-2. A beginner-friendly `description` explaining what it is with a simple analogy, in around 100 words{desc_lang_hint}.
-3. A list of relevant `file_indices` (integers) using the format `idx # path/comment`.
-
-List of file indices and paths present in the context:
-{file_listing_for_prompt}
-
-Format the output as a YAML list of dictionaries:
-
-```yaml
-- name: |
-    Query Processing{name_lang_hint}
-  description: |
-    Explains what the abstraction does.
-    It's like a central dispatcher routing requests.{desc_lang_hint}
-  file_indices:
-    - 0 # path/to/file1.py
-    - 3 # path/to/related.py
-- name: |
-    Query Optimization{name_lang_hint}
-  description: |
-    Another core concept, similar to a blueprint for objects.{desc_lang_hint}
-  file_indices:
-    - 5 # path/to/another.js
-# ... up to {max_abstraction_num} abstractions
-```"""
-        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
-
-        # --- Validation ---
-        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
-        abstractions = yaml.safe_load(yaml_str)
-
-        if not isinstance(abstractions, list):
-            raise ValueError("LLM Output is not a list")
-
-        validated_abstractions = []
-        for item in abstractions:
-            if not isinstance(item, dict) or not all(
-                k in item for k in ["name", "description", "file_indices"]
-            ):
-                raise ValueError(f"Missing keys in abstraction item: {item}")
-            if not isinstance(item["name"], str):
-                raise ValueError(f"Name is not a string in item: {item}")
-            if not isinstance(item["description"], str):
-                raise ValueError(f"Description is not a string in item: {item}")
-            if not isinstance(item["file_indices"], list):
-                raise ValueError(f"file_indices is not a list in item: {item}")
-
-            # Validate indices
-            validated_indices = []
-            for idx_entry in item["file_indices"]:
-                try:
-                    if isinstance(idx_entry, int):
-                        idx = idx_entry
-                    elif isinstance(idx_entry, str) and "#" in idx_entry:
-                        idx = int(idx_entry.split("#")[0].strip())
-                    else:
-                        idx = int(str(idx_entry).strip())
-
-                    if not (0 <= idx < file_count):
-                        raise ValueError(
-                            f"Invalid file index {idx} found in item {item['name']}. Max index is {file_count - 1}."
-                        )
-                    validated_indices.append(idx)
-                except (ValueError, TypeError):
-                    raise ValueError(
-                        f"Could not parse index from entry: {idx_entry} in item {item['name']}"
+        batches = self._plan_batches(
+            project_name,
+            chunk_catalog,
+            chunk_inventory,
+            use_cache,
+        )
+        candidates = []
+        for batch in batches:
+            chunk_ids = batch["chunk_ids"]
+            packed_batches = pack_chunks_for_prompt(chunk_inventory, chunk_ids)
+            for chunk_group in packed_batches:
+                candidates.extend(
+                    self._extract_batch_abstractions(
+                        project_name,
+                        batch,
+                        chunk_group,
+                        language,
+                        use_cache,
                     )
+                )
 
-            item["files"] = sorted(list(set(validated_indices)))
-            # Store only the required fields
-            validated_abstractions.append(
-                {
-                    "name": item["name"],  # Potentially translated name
-                    "description": item[
-                        "description"
-                    ],  # Potentially translated description
-                    "files": item["files"],
-                }
-            )
+        validated_abstractions = self._validate_and_merge(
+            candidates,
+            chunk_inventory,
+            file_count,
+            max_abstraction_num,
+        )
 
         print(f"Identified {len(validated_abstractions)} abstractions.")
         return validated_abstractions
@@ -235,6 +158,200 @@ Format the output as a YAML list of dictionaries:
         shared["abstractions"] = (
             exec_res  # List of {"name": str, "description": str, "files": [int]}
         )
+
+    def _plan_batches(self, project_name, chunk_catalog, chunk_inventory, use_cache):
+        chunk_ids = {chunk["chunk_id"] for chunk in chunk_inventory}
+        prompt = f"""
+For the project `{project_name}`, plan semantic code chunk batches for abstraction discovery.
+
+Chunk catalog:
+{chunk_catalog}
+
+Group related chunks into prompt-safe batches. Prefer middle-level code concepts that
+map to symbols, scopes, routing, registration, configuration, orchestration, or data flow.
+Include misc chunks when they explain wiring, imports, module-level constants, config,
+registration, or dependency injection. Use only chunk_id values listed above.
+
+Format the output as YAML:
+
+```yaml
+batches:
+  - name: |
+      Request Routing Layer
+    reason: |
+      Groups route registration and handler dispatch symbols.
+    chunk_ids:
+      - "00003:src/router.ts:entity:0"
+      - "00003:src/router.ts:misc:0"
+```
+"""
+        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
+        try:
+            data = _load_yaml_block(response)
+            batches = data.get("batches") if isinstance(data, dict) else None
+            return _validate_batches(batches, chunk_ids)
+        except ValueError as exc:
+            print(f"Chunk planning failed; using deterministic fallback: {exc}")
+            return deterministic_plan_batches(chunk_inventory)
+
+    def _extract_batch_abstractions(self, project_name, batch, chunks, language, use_cache):
+        language_instruction = ""
+        name_lang_hint = ""
+        desc_lang_hint = ""
+        if language.lower() != "english":
+            language_instruction = f"IMPORTANT: Generate `name` and `description` in **{language.capitalize()}**. Do NOT use English for these fields.\n\n"
+            name_lang_hint = f" (value in {language.capitalize()})"
+            desc_lang_hint = f" (value in {language.capitalize()})"
+
+        prompt = f"""
+For the project `{project_name}`, extract middle-level code abstractions from this planned chunk batch.
+
+Batch name: {batch.get("name", "Code Chunk Batch")}
+Batch reason: {batch.get("reason", "")}
+
+Chunk context:
+{format_chunks_for_prompt(chunks)}
+
+{language_instruction}Identify abstractions that are useful for onboarding.
+Prefer concepts that map to code symbols, scopes, module wiring, config, routing,
+providers, schedulers, data models, or orchestration. Do not produce a raw function
+list, and do not produce product-level slogans that cannot be mapped to code.
+Misc chunks may be core evidence for routing, registration, configuration, or glue code.
+
+For each abstraction, provide:
+1. A concise `name`{name_lang_hint}.
+2. A beginner-friendly `description` explaining the code concept{desc_lang_hint}.
+3. `file_indices` using valid file indices shown in chunk headers.
+4. `supporting_chunk_ids` using only chunk ids shown in this batch.
+
+Format the output as YAML:
+
+```yaml
+abstractions:
+  - name: |
+      Route Registration{name_lang_hint}
+    description: |
+      Explains how route definitions are collected and connected to handlers.{desc_lang_hint}
+    file_indices:
+      - 3 # src/router.ts
+    supporting_chunk_ids:
+      - "00003:src/router.ts:entity:0"
+      - "00003:src/router.ts:misc:0"
+```
+"""
+        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
+        data = _load_yaml_block(response)
+        if isinstance(data, dict):
+            abstractions = data.get("abstractions", [])
+        else:
+            abstractions = data
+        if not isinstance(abstractions, list):
+            raise ValueError("Batch abstraction output is not a list")
+        return abstractions
+
+    def _validate_and_merge(self, candidates, chunks, file_count, max_abstraction_num):
+        chunk_ids = {chunk["chunk_id"] for chunk in chunks}
+        merged = []
+        seen_names = set()
+
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            description = item.get("description")
+            if not isinstance(name, str) or not isinstance(description, str):
+                continue
+
+            supporting_ids = _valid_supporting_ids(item, chunk_ids)
+            file_indices = _parse_file_indices(item.get("file_indices", []), file_count)
+            if not file_indices and supporting_ids:
+                file_indices = extract_file_indices(chunks, supporting_ids)
+            if not file_indices:
+                continue
+
+            dedupe_key = name.strip().lower()
+            if dedupe_key in seen_names:
+                continue
+            seen_names.add(dedupe_key)
+            merged.append(
+                {
+                    "name": name.strip(),
+                    "description": description.strip(),
+                    "files": file_indices,
+                }
+            )
+            if len(merged) >= max_abstraction_num:
+                break
+
+        if not merged:
+            raise ValueError("No valid abstractions were extracted from chunk batches")
+        return merged
+
+
+def _load_yaml_block(response):
+    text = response.strip()
+    if "```yaml" in text:
+        text = text.split("```yaml", 1)[1].split("```", 1)[0].strip()
+    elif "```" in text:
+        text = text.split("```", 1)[1].split("```", 1)[0].strip()
+    data = yaml.safe_load(text)
+    if data is None:
+        raise ValueError("LLM returned empty YAML")
+    return data
+
+
+def _validate_batches(batches, valid_chunk_ids):
+    if not isinstance(batches, list):
+        raise ValueError("Planning output missing batches list")
+    validated = []
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        chunk_ids = batch.get("chunk_ids")
+        if not isinstance(chunk_ids, list):
+            continue
+        clean_ids = []
+        for chunk_id in chunk_ids:
+            if chunk_id not in valid_chunk_ids:
+                raise ValueError(f"Invalid chunk id in planning output: {chunk_id}")
+            clean_ids.append(chunk_id)
+        if clean_ids:
+            validated.append(
+                {
+                    "name": str(batch.get("name") or "Code Chunk Batch").strip(),
+                    "reason": str(batch.get("reason") or "").strip(),
+                    "chunk_ids": clean_ids,
+                }
+            )
+    if not validated:
+        raise ValueError("Planning output did not contain valid chunk batches")
+    return validated
+
+
+def _valid_supporting_ids(item, valid_chunk_ids):
+    supporting_ids = item.get("supporting_chunk_ids", [])
+    if not isinstance(supporting_ids, list):
+        return []
+    return [chunk_id for chunk_id in supporting_ids if chunk_id in valid_chunk_ids]
+
+
+def _parse_file_indices(raw_indices, file_count):
+    if not isinstance(raw_indices, list):
+        return []
+    parsed = []
+    for idx_entry in raw_indices:
+        try:
+            if isinstance(idx_entry, int):
+                idx = idx_entry
+            elif isinstance(idx_entry, str) and "#" in idx_entry:
+                idx = int(idx_entry.split("#")[0].strip())
+            else:
+                idx = int(str(idx_entry).strip())
+        except (ValueError, TypeError):
+            continue
+        if 0 <= idx < file_count:
+            parsed.append(idx)
+    return sorted(set(parsed))
 
 
 class AnalyzeRelationships(Node):

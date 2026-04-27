@@ -44,7 +44,7 @@ This project primarily uses a **Workflow** pattern to decompose the tutorial gen
 ### Flow high-level Design:
 
 1.  **`FetchRepo`**: Crawls the specified GitHub repository URL or local directory using appropriate utility (`crawl_github_files` or `crawl_local_files`), retrieving relevant source code file contents.
-2.  **`IdentifyAbstractions`**: Analyzes the codebase using an LLM to identify up to 10 core abstractions, generate beginner-friendly descriptions (potentially translated if language != English), and list the *indices* of files related to each abstraction.
+2.  **`IdentifyAbstractions`**: Builds an internal semantic chunk inventory, plans chunk batches with an LLM, and extracts up to 10 middle-level code abstractions that map to symbols, scopes, module wiring, routing, configuration, or orchestration. It still outputs beginner-friendly descriptions (potentially translated if language != English) and the *indices* of files related to each abstraction.
 3.  **`AnalyzeRelationships`**: Uses an LLM to analyze the identified abstractions (referenced by index) and their related code to generate a high-level project summary and describe the relationships/interactions between these abstractions (summary and labels potentially translated if language != English), specifying *source* and *target* abstraction indices and a concise label for each interaction.
 4.  **`OrderChapters`**: Determines the most logical order (as indices) to present the abstractions in the tutorial, considering input context which might be translated. The output order itself is language-independent.
 5.  **`WriteChapters` (BatchNode)**: Iterates through the ordered list of abstraction indices. For each abstraction, it calls an LLM to write a detailed, beginner-friendly chapter (content potentially fully translated if language != English), using the relevant code files (accessed via indices) and summaries of previously generated chapters (potentially translated) as context.
@@ -100,7 +100,7 @@ shared = {
     "language": "english", # Default or user-specified language for the tutorial
 
     # --- Intermediate/Output Data ---
-    "files": [], # Output of FetchRepo: List of tuples (file_path: str, file_content: str)
+    "files": [], # Output of FetchRepo: Stable sorted list of tuples (file_path: str, file_content: str)
     "abstractions": [], # Output of IdentifyAbstractions: List of {"name": str (potentially translated), "description": str (potentially translated), "files": [int]} (indices into shared["files"])
     "relationships": { # Output of AnalyzeRelationships
          "summary": None, # Overall project summary (potentially translated)
@@ -121,16 +121,16 @@ shared = {
     *   *Type*: Regular
     *   *Steps*:
         *   `prep`: Read `repo_url`, `local_dir`, `project_name`, `github_token`, `output_dir`, `include_patterns`, `exclude_patterns`, `max_file_size` from shared store. Determine `project_name` from `repo_url` or `local_dir` if not present in shared. Set `use_relative_paths` flag.
-        *   `exec`: If `repo_url` is present, call `crawl_github_files(...)`. Otherwise, call `crawl_local_files(...)`. Convert the resulting `files` dictionary into a list of `(path, content)` tuples.
+        *   `exec`: If `repo_url` is present, call `crawl_github_files(...)`. Otherwise, call `crawl_local_files(...)`. Convert the resulting `files` dictionary into a list of `(path, content)` tuples sorted by normalized relative path for stable file indices across runs.
         *   `post`: Write the list of `files` tuples and the derived `project_name` (if applicable) to the shared store.
 
 2.  **`IdentifyAbstractions`**
     *   *Purpose*: Analyze the code to identify key concepts/abstractions using indices. Generates potentially translated names and descriptions if language is not English.
     *   *Type*: Regular
     *   *Steps*:
-        *   `prep`: Read `files` (list of tuples), `project_name`, and `language` from shared store. Create context using `create_llm_context` helper which adds file indices. Format the list of `index # path` for the prompt.
-        *   `exec`: Construct a prompt for `call_llm`. If language is not English, add instructions to generate `name` and `description` in the target language. Ask LLM to identify ~5-10 core abstractions, provide a simple description for each, and list the relevant *file indices* (e.g., `- 0 # path/to/file.py`). Request YAML list output. Parse and validate the YAML, ensuring indices are within bounds and converting entries like `0 # path...` to just the integer `0`.
-        *   `post`: Write the validated list of `abstractions` (e.g., `[{"name": "Node", "description": "...", "files": [0, 3, 5]}, ...]`) containing file *indices* and potentially translated `name`/`description` to the shared store.
+        *   `prep`: Read `files` (list of tuples), `project_name`, and `language` from shared store. Build an internal semantic chunk inventory using `code-chunk` through the Node.js adapter, plus local misc/fallback chunks for glue code and unsupported files. Build a lightweight chunk catalog containing chunk ids, file indices, paths, kinds, symbols, signatures, line ranges, engine, and short context. This inventory is internal and is not written into the public shared store.
+        *   `exec`: First ask the LLM to group existing chunk ids into semantic batches. Invalid or unavailable planning falls back to deterministic packing by file/scope. Then ask the LLM to extract batch-local middle-level abstractions, each with `name`, `description`, `file_indices`, and internal `supporting_chunk_ids`. Validate chunk ids and file indices, infer file indices from supporting chunks when needed, merge duplicates, and cap the result to `max_abstraction_num`.
+        *   `post`: Write only the validated public list of `abstractions` (e.g., `[{"name": "Node", "description": "...", "files": [0, 3, 5]}, ...]`) containing file *indices* and potentially translated `name`/`description` to the shared store. Internal `supporting_chunk_ids` are discarded so downstream nodes keep the existing contract.
 
 3.  **`AnalyzeRelationships`**
     *   *Purpose*: Generate a project summary and describe how the identified abstractions interact using indices and concise labels. Generates potentially translated summary and labels if language is not English.

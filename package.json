@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "scripts": {
+    "chunk:probe": "node tools/code_chunk_adapter.mjs"
+  },
+  "dependencies": {
+    "code-chunk": "^0.1.14"
+  }
+}
