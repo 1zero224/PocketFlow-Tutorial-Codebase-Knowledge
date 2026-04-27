@@ -199,23 +199,25 @@ def format_chunks_for_prompt(chunks):
     return "\n\n".join(blocks)
 
 
-def deterministic_plan_batches(chunks, max_chars=DEFAULT_PROMPT_CHARS):
+def deterministic_plan_batches(chunks, max_chars=DEFAULT_PROMPT_CHARS, max_batches=None):
     batches = []
     current_ids = []
     current_size = 0
-    current_name = None
+    current_key = None
     for chunk in chunks:
         size = _prompt_size(chunk)
-        scope = chunk.get("parent_scope") or chunk.get("filepath")
-        if current_ids and (current_size + size > max_chars or scope != current_name):
-            batches.append(_batch(" / ".join(str(current_name).split("/")[-2:]), current_ids))
+        group_key = _planning_group_key(chunk)
+        if current_ids and (current_size + size > max_chars or group_key != current_key):
+            batches.append(_batch(current_key, current_ids))
             current_ids = []
             current_size = 0
-        current_name = scope
+        current_key = group_key
         current_ids.append(chunk["chunk_id"])
         current_size += size
     if current_ids:
-        batches.append(_batch(" / ".join(str(current_name).split("/")[-2:]), current_ids))
+        batches.append(_batch(current_key, current_ids))
+    if max_batches and len(batches) > max_batches:
+        return _select_representative_batches(batches, chunks, max_batches)
     return batches
 
 
@@ -344,6 +346,65 @@ def _shorten(text, limit):
 
 def _prompt_size(chunk):
     return len(chunk.get("context_text") or "") + len(chunk.get("content") or "") + 200
+
+
+def _planning_group_key(chunk):
+    path = normalize_path(chunk.get("filepath") or "")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2:
+        return "/".join(parts[:2])
+    if parts:
+        return parts[0]
+    return chunk.get("parent_scope") or "repo"
+
+
+def _select_representative_batches(batches, chunks, max_batches):
+    by_id = {chunk["chunk_id"]: chunk for chunk in chunks}
+    scored = [(_batch_score(batch, by_id), index, batch) for index, batch in enumerate(batches)]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    selected = []
+    per_group = {}
+    soft_cap = max(2, max_batches // 8)
+    for _, _, batch in scored:
+        group = batch["name"]
+        if per_group.get(group, 0) >= soft_cap:
+            continue
+        selected.append(batch)
+        per_group[group] = per_group.get(group, 0) + 1
+        if len(selected) >= max_batches:
+            break
+
+    if len(selected) < max_batches:
+        seen = {id(batch) for batch in selected}
+        for _, _, batch in scored:
+            if id(batch) in seen:
+                continue
+            selected.append(batch)
+            if len(selected) >= max_batches:
+                break
+    return selected
+
+
+def _batch_score(batch, chunks_by_id):
+    score = 0
+    for chunk_id in batch["chunk_ids"]:
+        chunk = chunks_by_id.get(chunk_id, {})
+        score += _chunk_score(chunk)
+    return score
+
+
+def _chunk_score(chunk):
+    path = normalize_path(chunk.get("filepath") or "").lower()
+    symbol = (chunk.get("symbol_path") or "").lower()
+    text = f"{path} {symbol}"
+    score = {"entity": 5, "misc": 2, "fallback": 1}.get(chunk.get("chunk_kind"), 1)
+    keywords = (
+        "main", "index", "app", "server", "router", "route", "api", "service",
+        "provider", "controller", "model", "schema", "config", "workflow",
+        "agent", "node", "flow", "scheduler", "store", "client",
+    )
+    return score + sum(4 for keyword in keywords if keyword in text)
 
 
 def _batch(name, chunk_ids):

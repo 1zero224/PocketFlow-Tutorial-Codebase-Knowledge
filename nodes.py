@@ -16,6 +16,11 @@ from utils.semantic_chunks import (
 )
 
 
+LLM_PLANNER_MAX_CHUNKS = 250
+LLM_PLANNER_MAX_CATALOG_CHARS = 60000
+MAX_LLM_EXTRACTION_BATCHES = 40
+
+
 # Helper to get content for specific file indices
 def get_content_for_indices(files_data, indices):
     content_map = {}
@@ -104,7 +109,6 @@ class IdentifyAbstractions(Node):
 
         return {
             "chunk_inventory": chunk_inventory,
-            "chunk_catalog": build_chunk_catalog(chunk_inventory),
             "file_count": len(files_data),
             "project_name": project_name,
             "language": language,
@@ -114,7 +118,6 @@ class IdentifyAbstractions(Node):
 
     def exec(self, prep_res):
         chunk_inventory = prep_res["chunk_inventory"]
-        chunk_catalog = prep_res["chunk_catalog"]
         file_count = prep_res["file_count"]
         project_name = prep_res["project_name"]
         language = prep_res["language"]
@@ -125,7 +128,6 @@ class IdentifyAbstractions(Node):
 
         batches = self._plan_batches(
             project_name,
-            chunk_catalog,
             chunk_inventory,
             use_cache,
         )
@@ -159,7 +161,28 @@ class IdentifyAbstractions(Node):
             exec_res  # List of {"name": str, "description": str, "files": [int]}
         )
 
-    def _plan_batches(self, project_name, chunk_catalog, chunk_inventory, use_cache):
+    def _plan_batches(self, project_name, chunk_inventory, use_cache):
+        if len(chunk_inventory) > LLM_PLANNER_MAX_CHUNKS:
+            print(
+                "Chunk inventory is large "
+                f"({len(chunk_inventory)} chunks); using deterministic bounded planning."
+            )
+            return deterministic_plan_batches(
+                chunk_inventory,
+                max_batches=MAX_LLM_EXTRACTION_BATCHES,
+            )
+
+        chunk_catalog = build_chunk_catalog(chunk_inventory)
+        if len(chunk_catalog) > LLM_PLANNER_MAX_CATALOG_CHARS:
+            print(
+                "Chunk catalog is large "
+                f"({len(chunk_catalog)} chars); using deterministic bounded planning."
+            )
+            return deterministic_plan_batches(
+                chunk_inventory,
+                max_batches=MAX_LLM_EXTRACTION_BATCHES,
+            )
+
         chunk_ids = {chunk["chunk_id"] for chunk in chunk_inventory}
         prompt = f"""
 For the project `{project_name}`, plan semantic code chunk batches for abstraction discovery.
@@ -190,7 +213,7 @@ batches:
             data = _load_yaml_block(response)
             batches = data.get("batches") if isinstance(data, dict) else None
             return _validate_batches(batches, chunk_ids)
-        except ValueError as exc:
+        except (ValueError, yaml.YAMLError) as exc:
             print(f"Chunk planning failed; using deterministic fallback: {exc}")
             return deterministic_plan_batches(chunk_inventory)
 

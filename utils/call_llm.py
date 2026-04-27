@@ -100,8 +100,10 @@ def _call_llm_provider(prompt: str) -> str:
         "temperature": 0.7,
     }
 
+    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "120"))
+
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         response_json = response.json() # Log the response
         logger.info("RESPONSE:\n%s", json.dumps(response_json, indent=2))
         #logger.info(f"RESPONSE: {response.json()}")

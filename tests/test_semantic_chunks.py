@@ -16,6 +16,7 @@ fake_pocketflow.BatchNode = FakeNode
 sys.modules.setdefault("pocketflow", fake_pocketflow)
 
 import nodes
+import utils.call_llm as call_llm_module
 from utils.semantic_chunks import (
     build_fallback_chunks,
     build_misc_chunks,
@@ -213,6 +214,59 @@ abstractions:
             ],
         )
         self.assertNotIn("supporting_chunk_ids", shared["abstractions"][0])
+
+    @patch("nodes.call_llm")
+    def test_large_chunk_inventory_skips_global_planner_llm(self, mock_call_llm):
+        mock_call_llm.return_value = "not: [valid"
+        chunks = []
+        for index in range(500):
+            chunks.append(
+                {
+                    "chunk_id": f"{index:05d}:src/mod_{index}.py:entity:0",
+                    "file_index": index,
+                    "filepath": f"src/mod_{index}.py",
+                    "language": "python",
+                    "engine": "code-chunk",
+                    "chunk_kind": "entity",
+                    "symbol_path": f"symbol_{index}",
+                    "signature": f"def symbol_{index}()",
+                    "line_range": {"start": 1, "end": 5},
+                    "content": "x" * 200,
+                    "context_text": "y" * 500,
+                    "parent_scope": "",
+                    "related_imports": [],
+                }
+            )
+
+        identify = nodes.IdentifyAbstractions()
+        batches = identify._plan_batches("large", chunks, use_cache=False)
+
+        self.assertGreater(len(batches), 1)
+        self.assertLessEqual(len(batches), nodes.MAX_LLM_EXTRACTION_BATCHES)
+        mock_call_llm.assert_not_called()
+
+    @patch.dict(
+        "os.environ",
+        {
+            "LLM_PROVIDER": "XAI",
+            "XAI_MODEL": "test-model",
+            "XAI_BASE_URL": "https://example.test",
+            "XAI_API_KEY": "secret",
+            "LLM_HTTP_TIMEOUT": "17",
+        },
+        clear=False,
+    )
+    @patch("utils.call_llm.requests.post")
+    def test_openai_compatible_provider_uses_timeout(self, mock_post):
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "ok"}}]
+        }
+        mock_post.return_value.raise_for_status.return_value = None
+
+        result = call_llm_module._call_llm_provider("hello")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(mock_post.call_args.kwargs["timeout"], 17.0)
 
 
 if __name__ == "__main__":
