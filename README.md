@@ -92,8 +92,11 @@ This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/Pocket
    addition to the Python dependencies.
    For OpenAI-compatible HTTP providers, you can set `LLM_HTTP_TIMEOUT`
    (seconds, default `120`) to avoid indefinitely waiting on slow upstream
-   responses. Large-repo abstraction analysis can also be tuned with
-   `LLM_MAX_EXTRACTION_BATCHES` (default `40`) and
+   responses. Abstraction discovery first asks the LLM to choose candidates from
+   a compact chunk catalog (`identify.compact_plan`), then sends only selected
+   evidence chunks for final refinement (`identify.refine`). If that compact
+   path fails validation, the older batch extraction fallback can still be
+   tuned with `LLM_MAX_EXTRACTION_BATCHES` (default `40`) and
    `LLM_EXTRACTION_CONCURRENCY` (default `1`), or the matching CLI flags
    `--max-extraction-batches` and `--llm-extraction-concurrency`. LLM call
    timing metrics are written as JSONL under `logs/llm_metrics_YYYYMMDD.jsonl`

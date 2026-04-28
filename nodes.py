@@ -8,11 +8,13 @@ from utils.call_llm import call_llm
 from utils.crawl_local_files import crawl_local_files
 from utils.semantic_chunks import (
     build_chunk_catalog,
+    build_compact_chunk_catalog,
     build_chunk_inventory,
     deterministic_plan_batches,
     extract_file_indices,
     format_chunks_for_prompt,
     pack_chunks_for_prompt,
+    select_chunks_by_ids,
     sort_files_items,
 )
 
@@ -176,20 +178,24 @@ class IdentifyAbstractions(Node):
 
         print(f"Identifying abstractions using LLM...")
 
-        batches = self._plan_batches(
-            project_name,
-            chunk_inventory,
-            use_cache,
-            max_extraction_batches,
-        )
-        jobs = self._build_extraction_jobs(project_name, chunk_inventory, batches)
-        candidates = self._extract_batch_jobs(
-            jobs,
-            project_name,
-            language,
-            use_cache,
-            llm_extraction_concurrency,
-        )
+        try:
+            candidates = self._identify_with_compact_catalog(
+                project_name,
+                chunk_inventory,
+                language,
+                use_cache,
+                max_abstraction_num,
+            )
+        except (ValueError, yaml.YAMLError) as exc:
+            print(f"Compact catalog identification failed; using batch fallback: {exc}")
+            candidates = self._identify_with_batch_fallback(
+                project_name,
+                chunk_inventory,
+                language,
+                use_cache,
+                max_extraction_batches,
+                llm_extraction_concurrency,
+            )
 
         validated_abstractions = self._validate_and_merge(
             candidates,
@@ -205,6 +211,143 @@ class IdentifyAbstractions(Node):
         shared["abstractions"] = (
             exec_res  # List of {"name": str, "description": str, "files": [int]}
         )
+
+    def _identify_with_compact_catalog(
+        self,
+        project_name,
+        chunk_inventory,
+        language,
+        use_cache,
+        max_abstraction_num,
+    ):
+        plan = self._plan_compact_abstractions(
+            project_name,
+            chunk_inventory,
+            language,
+            use_cache,
+            max_abstraction_num,
+        )
+        selected_chunks = select_chunks_by_ids(
+            chunk_inventory,
+            _planned_supporting_ids(plan, chunk_inventory),
+        )
+        if not selected_chunks:
+            raise ValueError("Compact planner selected no valid evidence chunks")
+        return self._refine_compact_abstractions(
+            project_name,
+            plan,
+            selected_chunks,
+            language,
+            use_cache,
+            max_abstraction_num,
+        )
+
+    def _identify_with_batch_fallback(
+        self,
+        project_name,
+        chunk_inventory,
+        language,
+        use_cache,
+        max_extraction_batches,
+        llm_extraction_concurrency,
+    ):
+        batches = self._plan_batches(
+            project_name,
+            chunk_inventory,
+            use_cache,
+            max_extraction_batches,
+        )
+        jobs = self._build_extraction_jobs(project_name, chunk_inventory, batches)
+        return self._extract_batch_jobs(
+            jobs,
+            project_name,
+            language,
+            use_cache,
+            llm_extraction_concurrency,
+        )
+
+    def _plan_compact_abstractions(
+        self,
+        project_name,
+        chunk_inventory,
+        language,
+        use_cache,
+        max_abstraction_num,
+    ):
+        language_instruction = ""
+        if language.lower() != "english":
+            language_instruction = (
+                f"Generate candidate `name` values in {language.capitalize()}.\n\n"
+            )
+        prompt = f"""
+For the project `{project_name}`, choose a small set of tutorial-worthy code abstractions from this compact semantic chunk catalog.
+
+Compact catalog:
+{build_compact_chunk_catalog(chunk_inventory)}
+
+{language_instruction}Select at most {max_abstraction_num} middle-level concepts that are useful for onboarding.
+Prefer entrypoints, model/workflow orchestration, public APIs, configuration, providers, data models, schedulers, stores, or core adapters.
+Use only chunk_id values from the catalog. Do not choose test-only, demo-only, or trivial utility chunks unless they explain core wiring.
+
+Format the output as YAML:
+
+```yaml
+abstractions:
+  - name: |
+      Routing Layer
+    reason: |
+      Explains how request routes connect to handlers.
+    supporting_chunk_ids:
+      - "00003:src/router.ts:entity:0"
+      - "00003:src/router.ts:misc:0"
+```
+"""
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="identify.compact_plan",
+            metadata={
+                "project_name": project_name,
+                "chunk_count": len(chunk_inventory),
+                "max_abstraction_num": max_abstraction_num,
+            },
+        )
+        data = _load_yaml_block(response)
+        candidates = data.get("abstractions") if isinstance(data, dict) else data
+        return _validate_compact_plan(candidates, chunk_inventory, max_abstraction_num)
+
+    def _refine_compact_abstractions(
+        self,
+        project_name,
+        plan,
+        selected_chunks,
+        language,
+        use_cache,
+        max_abstraction_num,
+    ):
+        prompt = _compact_refinement_prompt(
+            project_name,
+            plan,
+            selected_chunks,
+            language,
+            max_abstraction_num,
+        )
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="identify.refine",
+            metadata={
+                "project_name": project_name,
+                "planned_abstractions": len(plan),
+                "selected_chunk_count": len(selected_chunks),
+                "max_abstraction_num": max_abstraction_num,
+            },
+        )
+        data = _load_yaml_block(response)
+        abstractions = data.get("abstractions") if isinstance(data, dict) else data
+        if not isinstance(abstractions, list):
+            raise ValueError("Refined abstraction output is not a list")
+        return abstractions
 
     def _build_extraction_jobs(self, project_name, chunk_inventory, batches):
         jobs = []
@@ -510,6 +653,111 @@ def _validate_batches(batches, valid_chunk_ids):
     if not validated:
         raise ValueError("Planning output did not contain valid chunk batches")
     return validated
+
+
+def _validate_compact_plan(candidates, chunks, max_abstraction_num):
+    if not isinstance(candidates, list):
+        raise ValueError("Compact planning output missing abstractions list")
+    valid_chunk_ids = {chunk["chunk_id"] for chunk in chunks}
+    validated = []
+    seen_names = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        supporting_ids = _valid_supporting_ids(item, valid_chunk_ids)
+        if not supporting_ids:
+            continue
+        dedupe_key = name.strip().lower()
+        if dedupe_key in seen_names:
+            continue
+        seen_names.add(dedupe_key)
+        validated.append(
+            {
+                "name": name.strip(),
+                "reason": str(item.get("reason") or "").strip(),
+                "supporting_chunk_ids": supporting_ids,
+            }
+        )
+        if len(validated) >= max_abstraction_num:
+            break
+    if not validated:
+        raise ValueError("Compact planning output did not select valid chunks")
+    return validated
+
+
+def _planned_supporting_ids(plan, chunks):
+    valid_chunk_ids = {chunk["chunk_id"] for chunk in chunks}
+    ids = []
+    seen = set()
+    for item in plan:
+        for chunk_id in item.get("supporting_chunk_ids", []):
+            if chunk_id in valid_chunk_ids and chunk_id not in seen:
+                ids.append(chunk_id)
+                seen.add(chunk_id)
+    return ids
+
+
+def _format_compact_plan_for_prompt(plan):
+    blocks = []
+    for index, item in enumerate(plan):
+        supporting = "\n".join(f"      - {chunk_id}" for chunk_id in item["supporting_chunk_ids"])
+        blocks.append(
+            "\n".join(
+                [
+                    f"  - index: {index}",
+                    f"    name: {item['name']}",
+                    f"    reason: {item.get('reason', '')}",
+                    "    supporting_chunk_ids:",
+                    supporting,
+                ]
+            )
+        )
+    return "abstractions:\n" + "\n".join(blocks)
+
+
+def _compact_refinement_prompt(
+    project_name,
+    plan,
+    selected_chunks,
+    language,
+    max_abstraction_num,
+):
+    language_instruction = ""
+    if language.lower() != "english":
+        language_instruction = f"Generate `name` and `description` in {language.capitalize()}.\n\n"
+    return f"""
+For the project `{project_name}`, refine these planned tutorial abstractions using only the selected evidence chunks.
+
+Planned abstractions:
+{_format_compact_plan_for_prompt(plan)}
+
+Selected evidence chunks:
+{format_chunks_for_prompt(selected_chunks)}
+
+{language_instruction}Produce final onboarding abstractions. Merge overlapping candidates, discard weak candidates, and keep at most {max_abstraction_num}.
+For each abstraction, provide:
+1. A concise `name`.
+2. A beginner-friendly `description`.
+3. `file_indices` using valid file indices shown in chunk headers.
+4. `supporting_chunk_ids` using only selected chunk ids shown above.
+
+Format the output as YAML:
+
+```yaml
+abstractions:
+  - name: |
+      Routing Layer
+    description: |
+      Explains how routes connect incoming requests to handlers.
+    file_indices:
+      - 3 # src/router.ts
+    supporting_chunk_ids:
+      - "00003:src/router.ts:entity:0"
+```
+"""
 
 
 def _valid_supporting_ids(item, valid_chunk_ids):

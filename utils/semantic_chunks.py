@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 DEFAULT_PROMPT_CHARS = 12000
+DEFAULT_COMPACT_CATALOG_CHARS = 60000
 MAX_FALLBACK_CHARS = 3000
 MAX_FALLBACK_LINES = 80
 MAX_MISC_CHARS = 2200
@@ -156,6 +157,35 @@ def build_chunk_catalog(chunks):
             )
         )
     return "\n".join(lines)
+
+
+def build_compact_chunk_catalog(chunks, max_chars=DEFAULT_COMPACT_CATALOG_CHARS):
+    entries = sorted(
+        [_compact_catalog_entry(chunk) for chunk in chunks],
+        key=lambda item: (-item["score"], item["index"]),
+    )
+    lines = []
+    current_size = 0
+    for item in entries:
+        block = "\n".join(item["lines"])
+        next_size = current_size + len(block) + 1
+        if lines and next_size > max_chars:
+            break
+        lines.append(block)
+        current_size = next_size
+    return "\n".join(lines)
+
+
+def select_chunks_by_ids(chunks, chunk_ids):
+    by_id = {chunk["chunk_id"]: chunk for chunk in chunks}
+    selected = []
+    seen = set()
+    for chunk_id in chunk_ids:
+        if chunk_id in seen or chunk_id not in by_id:
+            continue
+        selected.append(by_id[chunk_id])
+        seen.add(chunk_id)
+    return selected
 
 
 def pack_chunks_for_prompt(chunks, chunk_ids, max_chars=DEFAULT_PROMPT_CHARS):
@@ -342,6 +372,27 @@ def _shorten(text, limit):
     if len(clean) <= limit:
         return clean
     return clean[: limit - 3] + "..."
+
+
+def _compact_catalog_entry(chunk):
+    rng = chunk["line_range"]
+    score = _chunk_score(chunk)
+    location = f"{chunk['file_index']} # {chunk['filepath']}"
+    lines = [
+        f"- chunk_id: {chunk['chunk_id']}",
+        f"  score: {score}",
+        f"  file: {location}",
+        f"  kind: {chunk['chunk_kind']}",
+        f"  symbol_path: {chunk.get('symbol_path', '')}",
+        f"  signature: {chunk.get('signature', '')}",
+        f"  lines: {rng['start']}-{rng['end']}",
+        f"  engine: {chunk['engine']}",
+        f"  context: {_shorten(chunk.get('context_text') or '', 260)}",
+    ]
+    imports = chunk.get("related_imports") or []
+    if imports:
+        lines.append(f"  related_imports: {', '.join(imports[:8])}")
+    return {"index": chunk["chunk_id"], "score": score, "lines": lines}
 
 
 def _prompt_size(chunk):

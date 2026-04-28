@@ -23,6 +23,7 @@ sys.modules.setdefault("pocketflow", fake_pocketflow)
 import nodes
 import utils.call_llm as call_llm_module
 from utils.semantic_chunks import (
+    build_compact_chunk_catalog,
     build_fallback_chunks,
     build_misc_chunks,
     extract_file_indices,
@@ -170,12 +171,12 @@ class SemanticChunkTests(unittest.TestCase):
         mock_build_chunk_inventory.return_value = fake_chunks
         mock_call_llm.side_effect = [
             """```yaml
-batches:
+abstractions:
   - name: |
       Alpha Layer
     reason: |
-      Alpha function batch.
-    chunk_ids:
+      Alpha function candidate.
+    supporting_chunk_ids:
       - "00000:a.py:entity:0"
 ```""",
             """```yaml
@@ -209,6 +210,10 @@ abstractions:
 
         self.assertEqual([path for path, _ in shared["files"]], ["a.py", "b.py"])
         self.assertEqual(
+            [call.kwargs["stage"] for call in mock_call_llm.call_args_list],
+            ["identify.compact_plan", "identify.refine"],
+        )
+        self.assertEqual(
             shared["abstractions"],
             [
                 {
@@ -219,6 +224,135 @@ abstractions:
             ],
         )
         self.assertNotIn("supporting_chunk_ids", shared["abstractions"][0])
+
+    @patch("nodes.call_llm")
+    def test_compact_plan_refines_only_selected_evidence_chunks(self, mock_call_llm):
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "file_index": 0,
+                "filepath": "models/backbone.py",
+                "language": "python",
+                "engine": "code-chunk",
+                "chunk_kind": "entity",
+                "symbol_path": "Backbone",
+                "signature": "class Backbone",
+                "line_range": {"start": 1, "end": 5},
+                "content": "class Backbone:\n    pass",
+                "context_text": "Backbone model",
+                "parent_scope": "",
+                "related_imports": [],
+            },
+            {
+                "chunk_id": "c2",
+                "file_index": 1,
+                "filepath": "unused/debug.py",
+                "language": "python",
+                "engine": "code-chunk",
+                "chunk_kind": "entity",
+                "symbol_path": "DebugTool",
+                "signature": "class DebugTool",
+                "line_range": {"start": 1, "end": 5},
+                "content": "class DebugTool:\n    pass",
+                "context_text": "Debug utility",
+                "parent_scope": "",
+                "related_imports": [],
+            },
+            {
+                "chunk_id": "c3",
+                "file_index": 2,
+                "filepath": "datasets/loader.py",
+                "language": "python",
+                "engine": "code-chunk",
+                "chunk_kind": "entity",
+                "symbol_path": "DatasetLoader",
+                "signature": "class DatasetLoader",
+                "line_range": {"start": 1, "end": 5},
+                "content": "class DatasetLoader:\n    pass",
+                "context_text": "Dataset loader",
+                "parent_scope": "",
+                "related_imports": [],
+            },
+        ]
+        mock_call_llm.side_effect = [
+            """```yaml
+abstractions:
+  - name: |
+      Model Backbone
+    reason: |
+      Core model code.
+    supporting_chunk_ids:
+      - c1
+      - c3
+```""",
+            """```yaml
+abstractions:
+  - name: |
+      Model Backbone
+    description: |
+      Explains how the backbone and dataset loader connect.
+    file_indices:
+      - 0 # models/backbone.py
+      - 2 # datasets/loader.py
+    supporting_chunk_ids:
+      - c1
+      - c3
+```""",
+        ]
+        prep_res = {
+            "chunk_inventory": chunks,
+            "file_count": 3,
+            "project_name": "vision",
+            "language": "english",
+            "use_cache": False,
+            "max_abstraction_num": 10,
+            "max_extraction_batches": 40,
+            "llm_extraction_concurrency": 1,
+        }
+
+        abstractions = nodes.IdentifyAbstractions().exec(prep_res)
+
+        self.assertEqual(len(mock_call_llm.call_args_list), 2)
+        self.assertEqual(
+            [call.kwargs["stage"] for call in mock_call_llm.call_args_list],
+            ["identify.compact_plan", "identify.refine"],
+        )
+        refinement_prompt = mock_call_llm.call_args_list[1].args[0]
+        self.assertIn("class Backbone", refinement_prompt)
+        self.assertIn("class DatasetLoader", refinement_prompt)
+        self.assertNotIn("class DebugTool", refinement_prompt)
+        self.assertEqual(
+            abstractions,
+            [
+                {
+                    "name": "Model Backbone",
+                    "description": "Explains how the backbone and dataset loader connect.",
+                    "files": [0, 2],
+                }
+            ],
+        )
+
+    def test_compact_catalog_excludes_full_code_body(self):
+        catalog = build_compact_chunk_catalog(
+            [
+                {
+                    "chunk_id": "c1",
+                    "file_index": 0,
+                    "filepath": "app.py",
+                    "chunk_kind": "entity",
+                    "symbol_path": "main",
+                    "signature": "def main()",
+                    "line_range": {"start": 1, "end": 3},
+                    "engine": "code-chunk",
+                    "context_text": "Main application entrypoint",
+                    "content": "def main():\n    secret_runtime_detail()\n",
+                }
+            ]
+        )
+
+        self.assertIn("def main()", catalog)
+        self.assertIn("Main application entrypoint", catalog)
+        self.assertNotIn("secret_runtime_detail", catalog)
 
     @patch("nodes.call_llm")
     def test_large_chunk_inventory_skips_global_planner_llm(self, mock_call_llm):
@@ -343,8 +477,34 @@ abstractions:
             "max_extraction_batches": 2,
             "llm_extraction_concurrency": 2,
         }
+        jobs = [
+            {
+                "ordinal": 0,
+                "batch": {"name": "first", "reason": "", "chunk_ids": ["c1"]},
+                "chunks": [chunks[0]],
+                "metadata": {},
+            },
+            {
+                "ordinal": 1,
+                "batch": {"name": "second", "reason": "", "chunk_ids": ["c2"]},
+                "chunks": [chunks[1]],
+                "metadata": {},
+            },
+        ]
 
-        abstractions = ParallelProbeIdentify().exec(prep_res)
+        candidates = ParallelProbeIdentify()._extract_batch_jobs(
+            jobs,
+            prep_res["project_name"],
+            prep_res["language"],
+            prep_res["use_cache"],
+            prep_res["llm_extraction_concurrency"],
+        )
+        abstractions = ParallelProbeIdentify()._validate_and_merge(
+            candidates,
+            prep_res["chunk_inventory"],
+            prep_res["file_count"],
+            prep_res["max_abstraction_num"],
+        )
 
         self.assertEqual([item["name"] for item in abstractions], ["first", "second"])
 
