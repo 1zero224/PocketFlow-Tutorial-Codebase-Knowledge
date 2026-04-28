@@ -1,6 +1,7 @@
 import os
 import re
 import yaml
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pocketflow import Node, BatchNode
 from utils.crawl_github_files import crawl_github_files
 from utils.call_llm import call_llm
@@ -19,6 +20,39 @@ from utils.semantic_chunks import (
 LLM_PLANNER_MAX_CHUNKS = 250
 LLM_PLANNER_MAX_CATALOG_CHARS = 60000
 MAX_LLM_EXTRACTION_BATCHES = 40
+DEFAULT_LLM_EXTRACTION_CONCURRENCY = 1
+
+
+def _positive_int(value, default):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _env_positive_int(name, default):
+    return _positive_int(os.getenv(name), default)
+
+
+def _extraction_metadata(
+    project_name,
+    batch,
+    batch_index,
+    batch_total,
+    chunk_group_index,
+    chunk_group_total,
+    chunk_count,
+):
+    return {
+        "project_name": project_name,
+        "batch_index": batch_index,
+        "batch_total": batch_total,
+        "batch_name": batch.get("name", "Code Chunk Batch"),
+        "chunk_group_index": chunk_group_index,
+        "chunk_group_total": chunk_group_total,
+        "chunk_count": chunk_count,
+    }
 
 
 # Helper to get content for specific file indices
@@ -102,6 +136,14 @@ class IdentifyAbstractions(Node):
         language = shared.get("language", "english")  # Get language
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
         max_abstraction_num = shared.get("max_abstraction_num", 10)  # Get max_abstraction_num, default to 10
+        max_extraction_batches = _positive_int(
+            shared.get("max_extraction_batches"),
+            _env_positive_int("LLM_MAX_EXTRACTION_BATCHES", MAX_LLM_EXTRACTION_BATCHES),
+        )
+        llm_extraction_concurrency = _positive_int(
+            shared.get("llm_extraction_concurrency"),
+            _env_positive_int("LLM_EXTRACTION_CONCURRENCY", DEFAULT_LLM_EXTRACTION_CONCURRENCY),
+        )
 
         chunk_inventory = build_chunk_inventory(files_data)
         if not chunk_inventory:
@@ -114,6 +156,8 @@ class IdentifyAbstractions(Node):
             "language": language,
             "use_cache": use_cache,
             "max_abstraction_num": max_abstraction_num,
+            "max_extraction_batches": max_extraction_batches,
+            "llm_extraction_concurrency": llm_extraction_concurrency,
         }
 
     def exec(self, prep_res):
@@ -123,6 +167,12 @@ class IdentifyAbstractions(Node):
         language = prep_res["language"]
         use_cache = prep_res["use_cache"]
         max_abstraction_num = prep_res["max_abstraction_num"]
+        max_extraction_batches = prep_res.get(
+            "max_extraction_batches", MAX_LLM_EXTRACTION_BATCHES
+        )
+        llm_extraction_concurrency = prep_res.get(
+            "llm_extraction_concurrency", DEFAULT_LLM_EXTRACTION_CONCURRENCY
+        )
 
         print(f"Identifying abstractions using LLM...")
 
@@ -130,21 +180,16 @@ class IdentifyAbstractions(Node):
             project_name,
             chunk_inventory,
             use_cache,
+            max_extraction_batches,
         )
-        candidates = []
-        for batch in batches:
-            chunk_ids = batch["chunk_ids"]
-            packed_batches = pack_chunks_for_prompt(chunk_inventory, chunk_ids)
-            for chunk_group in packed_batches:
-                candidates.extend(
-                    self._extract_batch_abstractions(
-                        project_name,
-                        batch,
-                        chunk_group,
-                        language,
-                        use_cache,
-                    )
-                )
+        jobs = self._build_extraction_jobs(project_name, chunk_inventory, batches)
+        candidates = self._extract_batch_jobs(
+            jobs,
+            project_name,
+            language,
+            use_cache,
+            llm_extraction_concurrency,
+        )
 
         validated_abstractions = self._validate_and_merge(
             candidates,
@@ -161,7 +206,37 @@ class IdentifyAbstractions(Node):
             exec_res  # List of {"name": str, "description": str, "files": [int]}
         )
 
-    def _plan_batches(self, project_name, chunk_inventory, use_cache):
+    def _build_extraction_jobs(self, project_name, chunk_inventory, batches):
+        jobs = []
+        for batch_index, batch in enumerate(batches):
+            packed_batches = pack_chunks_for_prompt(chunk_inventory, batch["chunk_ids"])
+            for chunk_group_index, chunk_group in enumerate(packed_batches):
+                jobs.append(
+                    {
+                        "ordinal": len(jobs),
+                        "batch": batch,
+                        "chunks": chunk_group,
+                        "metadata": _extraction_metadata(
+                            project_name,
+                            batch,
+                            batch_index,
+                            len(batches),
+                            chunk_group_index,
+                            len(packed_batches),
+                            len(chunk_group),
+                        ),
+                    }
+                )
+        return jobs
+
+    def _plan_batches(
+        self,
+        project_name,
+        chunk_inventory,
+        use_cache,
+        max_extraction_batches=None,
+    ):
+        max_batches = _positive_int(max_extraction_batches, MAX_LLM_EXTRACTION_BATCHES)
         if len(chunk_inventory) > LLM_PLANNER_MAX_CHUNKS:
             print(
                 "Chunk inventory is large "
@@ -169,7 +244,7 @@ class IdentifyAbstractions(Node):
             )
             return deterministic_plan_batches(
                 chunk_inventory,
-                max_batches=MAX_LLM_EXTRACTION_BATCHES,
+                max_batches=max_batches,
             )
 
         chunk_catalog = build_chunk_catalog(chunk_inventory)
@@ -180,7 +255,7 @@ class IdentifyAbstractions(Node):
             )
             return deterministic_plan_batches(
                 chunk_inventory,
-                max_batches=MAX_LLM_EXTRACTION_BATCHES,
+                max_batches=max_batches,
             )
 
         chunk_ids = {chunk["chunk_id"] for chunk in chunk_inventory}
@@ -208,16 +283,97 @@ batches:
       - "00003:src/router.ts:misc:0"
 ```
 """
-        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="identify.plan",
+            metadata={
+                "project_name": project_name,
+                "chunk_count": len(chunk_inventory),
+                "max_extraction_batches": max_batches,
+            },
+        )
         try:
             data = _load_yaml_block(response)
             batches = data.get("batches") if isinstance(data, dict) else None
             return _validate_batches(batches, chunk_ids)
         except (ValueError, yaml.YAMLError) as exc:
             print(f"Chunk planning failed; using deterministic fallback: {exc}")
-            return deterministic_plan_batches(chunk_inventory)
+            return deterministic_plan_batches(chunk_inventory, max_batches=max_batches)
 
-    def _extract_batch_abstractions(self, project_name, batch, chunks, language, use_cache):
+    def _extract_batch_jobs(
+        self,
+        jobs,
+        project_name,
+        language,
+        use_cache,
+        llm_extraction_concurrency,
+    ):
+        if not jobs:
+            return []
+
+        max_workers = min(_positive_int(llm_extraction_concurrency, 1), len(jobs))
+        if max_workers <= 1:
+            ordered_results = self._run_extraction_jobs_sequential(
+                jobs, project_name, language, use_cache
+            )
+        else:
+            ordered_results = self._run_extraction_jobs_parallel(
+                jobs, project_name, language, use_cache, max_workers
+            )
+
+        candidates = []
+        for _, result in sorted(ordered_results, key=lambda item: item[0]):
+            candidates.extend(result)
+        return candidates
+
+    def _run_extraction_jobs_sequential(self, jobs, project_name, language, use_cache):
+        return [
+            (
+                job["ordinal"],
+                self._extract_batch_abstractions(
+                    project_name,
+                    job["batch"],
+                    job["chunks"],
+                    language,
+                    use_cache,
+                    metadata=job["metadata"],
+                ),
+            )
+            for job in jobs
+        ]
+
+    def _run_extraction_jobs_parallel(
+        self, jobs, project_name, language, use_cache, max_workers
+    ):
+        print(f"Extracting abstractions with {max_workers} concurrent LLM workers...")
+        ordered_results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._extract_batch_abstractions,
+                    project_name,
+                    job["batch"],
+                    job["chunks"],
+                    language,
+                    use_cache,
+                    job["metadata"],
+                ): job["ordinal"]
+                for job in jobs
+            }
+            for future in as_completed(futures):
+                ordered_results.append((futures[future], future.result()))
+        return ordered_results
+
+    def _extract_batch_abstractions(
+        self,
+        project_name,
+        batch,
+        chunks,
+        language,
+        use_cache,
+        metadata=None,
+    ):
         language_instruction = ""
         name_lang_hint = ""
         desc_lang_hint = ""
@@ -262,7 +418,12 @@ abstractions:
       - "00003:src/router.ts:misc:0"
 ```
 """
-        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="identify.extract",
+            metadata=metadata,
+        )
         data = _load_yaml_block(response)
         if isinstance(data, dict):
             abstractions = data.get("abstractions", [])
@@ -484,7 +645,15 @@ relationships:
 
 Now, provide the YAML output:
 """
-        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="analyze.relationships",
+            metadata={
+                "project_name": project_name,
+                "num_abstractions": num_abstractions,
+            },
+        ) # Use cache only if enabled and not retrying
 
         # --- Validation ---
         yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
@@ -626,7 +795,15 @@ Output the ordered list of abstraction indices, including the name in a comment 
 
 Now, provide the YAML output:
 """
-        response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="order.chapters",
+            metadata={
+                "project_name": project_name,
+                "num_abstractions": num_abstractions,
+            },
+        ) # Use cache only if enabled and not retrying
 
         # --- Validation ---
         yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
@@ -863,7 +1040,17 @@ Instructions for the chapter (Generate content in {language.capitalize()} unless
 
 Now, directly provide a super beginner-friendly Markdown output (DON'T need ```markdown``` tags):
 """
-        chapter_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
+        chapter_content = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="write.chapter",
+            metadata={
+                "project_name": project_name,
+                "chapter_num": chapter_num,
+                "abstraction_index": item.get("abstraction_index"),
+                "abstraction_name": abstraction_name,
+            },
+        ) # Use cache only if enabled and not retrying
         # Basic validation/cleanup
         actual_heading = f"# Chapter {chapter_num}: {abstraction_name}"  # Use potentially translated name
         if not chapter_content.strip().startswith(f"# Chapter {chapter_num}"):

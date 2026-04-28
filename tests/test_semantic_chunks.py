@@ -1,5 +1,10 @@
 import unittest
+import json
+import os
 import sys
+import tempfile
+import threading
+import time
 import types
 from unittest.mock import patch
 
@@ -244,6 +249,128 @@ abstractions:
         self.assertGreater(len(batches), 1)
         self.assertLessEqual(len(batches), nodes.MAX_LLM_EXTRACTION_BATCHES)
         mock_call_llm.assert_not_called()
+
+    @patch("nodes.build_chunk_inventory")
+    def test_identify_prep_accepts_analysis_budget_controls(self, mock_build_chunk_inventory):
+        mock_build_chunk_inventory.return_value = [
+            {
+                "chunk_id": "00000:a.py:entity:0",
+                "file_index": 0,
+                "filepath": "a.py",
+                "language": "python",
+                "engine": "code-chunk",
+                "chunk_kind": "entity",
+                "symbol_path": "alpha",
+                "signature": "def alpha()",
+                "line_range": {"start": 1, "end": 2},
+                "content": "def alpha():\n    return 1",
+                "context_text": "Function alpha",
+                "parent_scope": "",
+                "related_imports": [],
+            }
+        ]
+        shared = {
+            "files": [("a.py", "def alpha():\n    return 1\n")],
+            "project_name": "sample",
+            "language": "english",
+            "use_cache": False,
+            "max_abstraction_num": 8,
+            "max_extraction_batches": 7,
+            "llm_extraction_concurrency": 3,
+        }
+
+        prep_res = nodes.IdentifyAbstractions().prep(shared)
+
+        self.assertEqual(prep_res["max_extraction_batches"], 7)
+        self.assertEqual(prep_res["llm_extraction_concurrency"], 3)
+
+    def test_parallel_extraction_preserves_batch_order(self):
+        class ParallelProbeIdentify(nodes.IdentifyAbstractions):
+            def _plan_batches(self, project_name, chunk_inventory, use_cache, max_extraction_batches=None):
+                return [
+                    {"name": "first", "reason": "", "chunk_ids": ["c1"]},
+                    {"name": "second", "reason": "", "chunk_ids": ["c2"]},
+                ]
+
+            def _extract_batch_abstractions(self, project_name, batch, chunks, language, use_cache, metadata=None):
+                if batch["name"] == "first":
+                    if not second_started.wait(0.5):
+                        raise AssertionError("expected second batch to start before first returns")
+                    time.sleep(0.01)
+                else:
+                    second_started.set()
+                return [
+                    {
+                        "name": batch["name"],
+                        "description": f"{batch['name']} description",
+                        "file_indices": [chunks[0]["file_index"]],
+                        "supporting_chunk_ids": [chunks[0]["chunk_id"]],
+                    }
+                ]
+
+        second_started = threading.Event()
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "file_index": 0,
+                "filepath": "a.py",
+                "chunk_kind": "entity",
+                "line_range": {"start": 1, "end": 1},
+                "content": "a",
+                "context_text": "a",
+                "symbol_path": "a",
+                "engine": "code-chunk",
+            },
+            {
+                "chunk_id": "c2",
+                "file_index": 1,
+                "filepath": "b.py",
+                "chunk_kind": "entity",
+                "line_range": {"start": 1, "end": 1},
+                "content": "b",
+                "context_text": "b",
+                "symbol_path": "b",
+                "engine": "code-chunk",
+            },
+        ]
+        prep_res = {
+            "chunk_inventory": chunks,
+            "file_count": 2,
+            "project_name": "sample",
+            "language": "english",
+            "use_cache": False,
+            "max_abstraction_num": 10,
+            "max_extraction_batches": 2,
+            "llm_extraction_concurrency": 2,
+        }
+
+        abstractions = ParallelProbeIdentify().exec(prep_res)
+
+        self.assertEqual([item["name"] for item in abstractions], ["first", "second"])
+
+    def test_call_llm_writes_jsonl_telemetry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            telemetry_file = os.path.join(tmpdir, "llm_metrics.jsonl")
+            with patch.dict("os.environ", {"LLM_TELEMETRY_FILE": telemetry_file}, clear=False):
+                with patch("utils.call_llm.get_llm_provider", return_value="XAI"):
+                    with patch("utils.call_llm._call_llm_provider", return_value="ok"):
+                        result = call_llm_module.call_llm(
+                            "hello",
+                            use_cache=False,
+                            stage="identify.extract",
+                            metadata={"batch_index": 1},
+                        )
+
+            self.assertEqual(result, "ok")
+            with open(telemetry_file, "r", encoding="utf-8") as handle:
+                rows = [json.loads(line) for line in handle if line.strip()]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["stage"], "identify.extract")
+        self.assertEqual(rows[0]["metadata"], {"batch_index": 1})
+        self.assertEqual(rows[0]["prompt_chars"], 5)
+        self.assertFalse(rows[0]["cache_hit"])
+        self.assertGreaterEqual(rows[0]["duration_sec"], 0)
 
     @patch.dict(
         "os.environ",

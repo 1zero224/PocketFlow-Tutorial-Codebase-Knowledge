@@ -3,6 +3,8 @@ import os
 import logging
 import json
 import requests
+import threading
+import time
 from datetime import datetime
 
 # Configure logging
@@ -24,6 +26,8 @@ logger.addHandler(file_handler)
 
 # Simple cache configuration
 cache_file = "llm_cache.json"
+_cache_lock = threading.RLock()
+_telemetry_lock = threading.Lock()
 
 
 def load_cache():
@@ -41,6 +45,142 @@ def save_cache(cache):
             json.dump(cache, f)
     except:
         logger.warning(f"Failed to save cache")
+
+
+def _telemetry_path():
+    configured = os.getenv("LLM_TELEMETRY_FILE")
+    if configured:
+        return configured
+    return os.path.join(
+        log_directory, f"llm_metrics_{datetime.now().strftime('%Y%m%d')}.jsonl"
+    )
+
+
+def _telemetry_enabled():
+    value = os.getenv("LLM_TELEMETRY", "1").strip().lower()
+    return value not in {"0", "false", "off", "no"}
+
+
+def _model_for_provider(provider):
+    if provider == "GEMINI":
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-pro-exp-03-25")
+    if provider:
+        return os.getenv(f"{provider}_MODEL")
+    return None
+
+
+def _cached_response(prompt):
+    with _cache_lock:
+        cache = load_cache()
+        return cache.get(prompt)
+
+
+def _save_cached_response(prompt, response_text):
+    with _cache_lock:
+        cache = load_cache()
+        cache[prompt] = response_text
+        save_cache(cache)
+
+
+def _dispatch_llm_call(prompt, provider):
+    if provider == "GEMINI":
+        return _call_llm_gemini(prompt)
+    return _call_llm_provider(prompt)
+
+
+def _record_llm_telemetry(
+    *,
+    stage,
+    prompt,
+    provider,
+    model,
+    started_at,
+    duration_sec,
+    cache_hit,
+    success,
+    metadata=None,
+    error=None,
+):
+    if not _telemetry_enabled():
+        return
+
+    event = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "started_at": started_at,
+        "stage": stage or "unspecified",
+        "provider": provider,
+        "model": model,
+        "prompt_chars": len(prompt),
+        "duration_sec": round(duration_sec, 3),
+        "cache_hit": bool(cache_hit),
+        "success": bool(success),
+        "metadata": metadata or {},
+    }
+    if error:
+        event["error"] = str(error)
+
+    try:
+        path = _telemetry_path()
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with _telemetry_lock:
+            with open(path, "a", encoding="utf-8") as handle:
+                json.dump(event, handle, ensure_ascii=False)
+                handle.write("\n")
+    except Exception as exc:
+        logger.warning(f"Failed to write LLM telemetry: {exc}")
+
+
+def _record_call_telemetry(
+    stage,
+    prompt,
+    provider,
+    model,
+    started_at,
+    start_time,
+    cache_hit,
+    success,
+    metadata,
+    error=None,
+):
+    _record_llm_telemetry(
+        stage=stage,
+        prompt=prompt,
+        provider=provider,
+        model=model,
+        started_at=started_at,
+        duration_sec=time.perf_counter() - start_time,
+        cache_hit=cache_hit,
+        success=success,
+        metadata=metadata,
+        error=error,
+    )
+
+
+def _call_context(prompt, stage, metadata):
+    return {
+        "prompt": prompt,
+        "stage": stage,
+        "metadata": metadata,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "start_time": time.perf_counter(),
+    }
+
+
+def _record_context_telemetry(context, provider, model, cache_hit, success, error=None):
+    _record_call_telemetry(
+        context["stage"],
+        context["prompt"],
+        provider,
+        model,
+        context["started_at"],
+        context["start_time"],
+        cache_hit,
+        success,
+        context["metadata"],
+        error=error,
+    )
 
 
 def get_llm_provider():
@@ -127,37 +267,45 @@ def _call_llm_provider(prompt: str) -> str:
         raise Exception(f"Failed to parse response as JSON from {provider}. The server might have returned an invalid response.")
 
 # By default, we Google Gemini 2.5 pro, as it shows great performance for code understanding
-def call_llm(prompt: str, use_cache: bool = True) -> str:
+def call_llm(
+    prompt: str,
+    use_cache: bool = True,
+    stage: str = None,
+    metadata: dict = None,
+) -> str:
+    context = _call_context(prompt, stage, metadata)
+    provider = None
+    model = None
+
     # Log the prompt
     logger.info(f"PROMPT: {prompt}")
 
-    # Check cache if enabled
-    if use_cache:
-        # Load cache from disk
-        cache = load_cache()
-        # Return from cache if exists
-        if prompt in cache:
-            logger.info(f"RESPONSE: {cache[prompt]}")
-            return cache[prompt]
+    try:
+        provider = get_llm_provider()
+        model = _model_for_provider(provider)
 
-    provider = get_llm_provider()
-    if provider == "GEMINI":
-        response_text = _call_llm_gemini(prompt)
-    else:  # generic method using a URL that is OpenAI compatible API (Ollama, ...)
-        response_text = _call_llm_provider(prompt)
+        # Check cache if enabled
+        if use_cache:
+            response_text = _cached_response(prompt)
+            if response_text is not None:
+                logger.info(f"RESPONSE: {response_text}")
+                _record_context_telemetry(context, provider, model, True, True)
+                return response_text
 
-    # Log the response
-    logger.info(f"RESPONSE: {response_text}")
+        response_text = _dispatch_llm_call(prompt, provider)
 
-    # Update cache if enabled
-    if use_cache:
-        # Load cache again to avoid overwrites
-        cache = load_cache()
-        # Add to cache and save
-        cache[prompt] = response_text
-        save_cache(cache)
+        # Log the response
+        logger.info(f"RESPONSE: {response_text}")
 
-    return response_text
+        # The lock keeps concurrent batch workers from overwriting cache updates.
+        if use_cache:
+            _save_cached_response(prompt, response_text)
+
+        _record_context_telemetry(context, provider, model, False, True)
+        return response_text
+    except Exception as exc:
+        _record_context_telemetry(context, provider, model, False, False, error=exc)
+        raise
 
 
 def _call_llm_gemini(prompt: str) -> str:

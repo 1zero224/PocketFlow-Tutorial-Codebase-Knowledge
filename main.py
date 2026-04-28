@@ -56,6 +56,18 @@ def main():
     parser.add_argument("--no-cache", action="store_true", help="Disable LLM response caching (default: caching enabled)")
     # Add max_abstraction_num parameter to control the number of abstractions
     parser.add_argument("--max-abstractions", type=int, default=10, help="Maximum number of abstractions to identify (default: 10)")
+    parser.add_argument(
+        "--max-extraction-batches",
+        type=int,
+        default=None,
+        help="Maximum LLM extraction batches during abstraction analysis (default: env LLM_MAX_EXTRACTION_BATCHES or 40)",
+    )
+    parser.add_argument(
+        "--llm-extraction-concurrency",
+        type=int,
+        default=None,
+        help="Concurrent LLM workers for abstraction extraction (default: env LLM_EXTRACTION_CONCURRENCY or 1)",
+    )
 
     args = parser.parse_args()
 
@@ -87,6 +99,8 @@ def main():
         
         # Add max_abstraction_num parameter
         "max_abstraction_num": args.max_abstractions,
+        "max_extraction_batches": args.max_extraction_batches,
+        "llm_extraction_concurrency": args.llm_extraction_concurrency,
 
         # Outputs will be populated by the nodes
         "files": [],
