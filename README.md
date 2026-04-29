@@ -117,8 +117,11 @@ This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/Pocket
     # Or, analyze a local directory
     python main.py --dir /path/to/your/codebase --include "*.py" --exclude "*test*"
 
-    # Or, generate a tutorial in Chinese
-    python main.py --repo https://github.com/username/repo --language "Chinese"
+    # Generate a tutorial in Chinese by default
+    python main.py --repo https://github.com/username/repo
+
+    # Or, override the tutorial language
+    python main.py --repo https://github.com/username/repo --language "English"
     ```
 
     - `--repo` or `--dir` - Specify either a GitHub repo URL or a local directory path (required, mutually exclusive)
@@ -128,7 +131,7 @@ This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/Pocket
     - `-i, --include` - Files to include (e.g., "`*.py`" "`*.js`")
     - `-e, --exclude` - Files to exclude (e.g., "`tests/*`" "`docs/*`")
     - `-s, --max-size` - Maximum file size in bytes (default: 100KB)
-    - `--language` - Language for the generated tutorial (default: "english")
+    - `--language` - Language for the generated tutorial (default: "Chinese")
     - `--max-abstractions` - Maximum number of abstractions to identify (default: 10)
     - `--no-cache` - Disable LLM response caching (default: caching enabled)
 

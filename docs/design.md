@@ -18,7 +18,7 @@ nav_order: 2
 **Input:**
 - A publicly accessible GitHub repository URL or a local directory path.
 - A project name (optional, will be derived from the URL/directory if not provided).
-- Desired language for the tutorial (optional, defaults to English).
+- Desired language for the tutorial (optional, defaults to Chinese).
 
 **Output:**
 - A directory named after the project containing:
@@ -97,7 +97,7 @@ shared = {
     "include_patterns": set(), # File patterns to include
     "exclude_patterns": set(), # File patterns to exclude
     "max_file_size": 100000, # Default or user-specified max file size
-    "language": "english", # Default or user-specified language for the tutorial
+    "language": "Chinese", # Default or user-specified language for the tutorial
 
     # --- Intermediate/Output Data ---
     "files": [], # Output of FetchRepo: Stable sorted list of tuples (file_path: str, file_content: str)

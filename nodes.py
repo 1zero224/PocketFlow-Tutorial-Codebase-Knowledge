@@ -23,6 +23,7 @@ LLM_PLANNER_MAX_CHUNKS = 250
 LLM_PLANNER_MAX_CATALOG_CHARS = 60000
 MAX_LLM_EXTRACTION_BATCHES = 40
 DEFAULT_LLM_EXTRACTION_CONCURRENCY = 1
+DEFAULT_TUTORIAL_LANGUAGE = "Chinese"
 
 
 def _positive_int(value, default):
@@ -135,7 +136,7 @@ class IdentifyAbstractions(Node):
     def prep(self, shared):
         files_data = shared["files"]
         project_name = shared["project_name"]  # Get project name
-        language = shared.get("language", "english")  # Get language
+        language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE)  # Get language
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
         max_abstraction_num = shared.get("max_abstraction_num", 10)  # Get max_abstraction_num, default to 10
         max_extraction_batches = _positive_int(
@@ -793,7 +794,7 @@ class AnalyzeRelationships(Node):
         ]  # Now contains 'files' list of indices, name/description potentially translated
         files_data = shared["files"]
         project_name = shared["project_name"]  # Get project name
-        language = shared.get("language", "english")  # Get language
+        language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE)  # Get language
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
 
         # Get the actual number of abstractions directly
@@ -969,7 +970,7 @@ class OrderChapters(Node):
         abstractions = shared["abstractions"]  # Name/description might be translated
         relationships = shared["relationships"]  # Summary/label might be translated
         project_name = shared["project_name"]  # Get project name
-        language = shared.get("language", "english")  # Get language
+        language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE)  # Get language
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
 
         # Prepare context for the LLM
@@ -1107,7 +1108,7 @@ class WriteChapters(BatchNode):
         ]  # List of {"name": str, "description": str, "files": [int]}
         files_data = shared["files"]  # List of (path, content) tuples
         project_name = shared["project_name"]
-        language = shared.get("language", "english")
+        language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE)
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
 
         # Get already written chapters to provide context
@@ -1202,7 +1203,7 @@ class WriteChapters(BatchNode):
         ]  # Potentially translated description
         chapter_num = item["chapter_num"]
         project_name = item.get("project_name")
-        language = item.get("language", "english")
+        language = item.get("language", DEFAULT_TUTORIAL_LANGUAGE)
         use_cache = item.get("use_cache", True) # Read use_cache from item
         print(f"Writing chapter {chapter_num} for: {abstraction_name} using LLM...")
 
@@ -1331,7 +1332,7 @@ class CombineTutorial(Node):
         output_base_dir = shared.get("output_dir", "output")  # Default output dir
         output_path = os.path.join(output_base_dir, project_name)
         repo_url = shared.get("repo_url")  # Get the repository URL
-        # language = shared.get("language", "english") # No longer needed for fixed strings
+        # language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE) # No longer needed for fixed strings
 
         # Get potentially translated data
         relationships_data = shared[
