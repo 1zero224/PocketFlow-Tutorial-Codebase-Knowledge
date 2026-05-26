@@ -3,6 +3,7 @@ import os
 import argparse
 # Import the function that creates the flow
 from flow import create_tutorial_flow
+from deep_flow import create_deep_tutorial_flow
 
 dotenv.load_dotenv()
 
@@ -60,6 +61,8 @@ def main():
     )
     # Add use_cache parameter to control LLM caching
     parser.add_argument("--no-cache", action="store_true", help="Disable LLM response caching (default: caching enabled)")
+    # Add deep analysis mode
+    parser.add_argument("--deep", action="store_true", help="Enable deep analysis mode with comprehensive documentation (10x more detailed)")
     # Add max_abstraction_num parameter to control the number of abstractions
     parser.add_argument("--max-abstractions", type=int, default=10, help="Maximum number of abstractions to identify (default: 10)")
     parser.add_argument(
@@ -118,11 +121,23 @@ def main():
     }
 
     # Display starting message with repository/directory and language
-    print(f"Starting tutorial generation for: {args.repo or args.dir} in {args.language.capitalize()} language")
+    mode = "Deep Analysis" if args.deep else "Standard"
+    print(f"Starting {mode} tutorial generation for: {args.repo or args.dir} in {args.language.capitalize()} language")
     print(f"LLM caching: {'Disabled' if args.no_cache else 'Enabled'}")
+    if args.deep:
+        print("Deep analysis mode enabled - generating comprehensive documentation with:")
+        print("  - Deep abstraction analysis (design motivation, trade-offs, alternatives)")
+        print("  - Design pattern identification and analysis")
+        print("  - Architecture overview with multiple Mermaid diagrams")
+        print("  - Detailed code walkthroughs")
+        print("  - Enhanced chapters (10x more detailed)")
+        print("  - Tutorial synthesis with quick start, FAQ, glossary")
 
-    # Create the flow instance
-    tutorial_flow = create_tutorial_flow()
+    # Create the flow instance based on mode
+    if args.deep:
+        tutorial_flow = create_deep_tutorial_flow()
+    else:
+        tutorial_flow = create_tutorial_flow()
 
     # Run the flow
     tutorial_flow.run(shared)

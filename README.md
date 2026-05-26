@@ -134,8 +134,26 @@ This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/Pocket
     - `--language` - Language for the generated tutorial (default: "Chinese")
     - `--max-abstractions` - Maximum number of abstractions to identify (default: 10)
     - `--no-cache` - Disable LLM response caching (default: caching enabled)
+    - `--deep` - Enable deep analysis mode (generates 10x more detailed documentation)
 
 The application will crawl the repository, analyze the codebase structure, generate tutorial content in the specified language, and save the output in the specified directory (default: ./output).
+
+### Deep Analysis Mode
+
+For comprehensive, in-depth documentation, use the `--deep` flag:
+
+```bash
+python main.py --repo https://github.com/username/repo --deep
+```
+
+This mode generates **10x more detailed documentation** with:
+
+- **Deep Abstraction Analysis**: Design motivation, trade-offs, alternatives, and improvements for each concept
+- **Design Pattern Analysis**: Identification and explanation of all design patterns used
+- **Architecture Overview**: Multiple Mermaid diagrams showing system architecture, data flow, and dependencies
+- **Code Walkthroughs**: Line-by-line explanations of key files
+- **Enhanced Chapters**: Each chapter includes origin, background, real-world examples, pitfalls, best practices, and advanced topics
+- **Tutorial Synthesis**: Quick start guide, FAQ, glossary, and learning paths
 
 
 <details>
