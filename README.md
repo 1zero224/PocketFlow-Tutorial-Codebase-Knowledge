@@ -154,6 +154,35 @@ python utils/call_llm.py
 
 ## Usage
 
+## Usage
+
+### Deep Analysis Mode
+
+For comprehensive, in-depth documentation, use the `--deep` flag:
+
+```bash
+python main.py --repo https://github.com/username/repo --deep
+```
+
+This mode generates **10x more detailed documentation** with:
+
+- **Deep Abstraction Analysis**: Design motivation, trade-offs, alternatives, and improvements for each concept
+- **Design Pattern Analysis**: Identification and explanation of all design patterns used
+- **Architecture Overview**: Multiple Mermaid diagrams showing system architecture, data flow, and dependencies
+- **Code Walkthroughs**: Line-by-line explanations of key files
+- **Enhanced Chapters**: Each chapter includes origin, background, real-world examples, pitfalls, best practices, and advanced topics
+- **Tutorial Synthesis**: Quick start guide, FAQ, glossary, and learning paths
+
+### Auto Abstraction Count
+
+By default, the `--max-abstractions` flag is set to `auto`, which lets the LLM estimate the optimal number of chapters based on project complexity (clamped between 3-12). For a fixed chapter count, pass an explicit value:
+
+```bash
+python main.py --repo https://github.com/username/repo --max-abstractions 15
+```
+
+### CLI Examples
+
 Show CLI help:
 
 ```bash
