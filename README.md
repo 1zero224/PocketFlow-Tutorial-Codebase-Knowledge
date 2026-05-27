@@ -1,195 +1,334 @@
-<h1 align="center">Turns Codebase into Easy Tutorial with AI</h1>
+# AI Codebase Tutorial Builder
+
+Turn a GitHub repository or local codebase into a beginner-friendly Markdown tutorial.
+
+This repository is a Pocket Flow based CLI pipeline. The current implementation crawls source files, builds semantic code chunks, asks an LLM to identify the main abstractions, analyzes how they relate, orders the chapters, writes each chapter, and finally combines everything into a tutorial folder.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
- <a href="https://discord.gg/hUHHE9Sa6T">
-    <img src="https://img.shields.io/discord/1346833819172601907?logo=discord&style=flat">
-</a>
-> *Ever stared at a new codebase written by others feeling completely lost? This tutorial shows you how to build an AI agent that analyzes GitHub repositories and creates beginner-friendly tutorials explaining exactly how the code works.*
 
 <p align="center">
-  <img
-    src="./assets/banner.png" width="800"
-  />
+  <img src="./assets/banner.png" width="800" alt="AI Codebase Tutorial Builder banner" />
 </p>
 
-This is a tutorial project of [Pocket Flow](https://github.com/The-Pocket/PocketFlow), a 100-line LLM framework. It crawls GitHub repositories and builds a knowledge base from the code. It analyzes entire codebases to identify core abstractions and how they interact, and transforms complex code into beginner-friendly tutorials with clear visualizations.
+## What the current code does
 
-- Check out the [YouTube Development Tutorial](https://youtu.be/AFY67zOpbSo) for more!
+- Accepts either a GitHub repository URL with `--repo` or a local directory with `--dir`
+- Filters files by include patterns, exclude patterns, and a max file size
+- Respects `.gitignore` when crawling a local directory
+- Uses a Node.js `code-chunk` sidecar to build semantic chunks when available
+- Falls back to coarse local chunks when Node.js is unavailable, so generation can still run
+- Uses a multi-step LLM workflow:
+  1. `FetchRepo`
+  2. `IdentifyAbstractions`
+  3. `AnalyzeRelationships`
+  4. `OrderChapters`
+  5. `WriteChapters`
+  6. `CombineTutorial`
+- Generates tutorials in `Chinese` by default
 
-- Check out the [Substack Post Tutorial](https://zacharyhuang.substack.com/p/ai-codebase-knowledge-builder-full) for more!
+The current tutorial writer is tuned for beginner-friendly output: short code blocks, Mermaid diagrams, cross-chapter links, simple explanations, and analogy-heavy walkthroughs.
 
-&nbsp;&nbsp;**🔸 🎉 Reached Hacker News Front Page** (April 2025) with >900 up‑votes:  [Discussion »](https://news.ycombinator.com/item?id=43739456)
+## Output
 
-&nbsp;&nbsp;**🔸 🎊 Online Service Now Live!** (May&nbsp;2025) Try our new online version at [https://code2tutorial.com/](https://code2tutorial.com/) – just paste a GitHub link, no installation needed!
+Running the generator creates a `pf_guide/` folder by default:
 
-## ⭐ Example Results for Popular GitHub Repositories!
+```text
+pf_guide/
+  index.md
+  01_<chapter_name>.md
+  02_<chapter_name>.md
+  ...
+```
 
-<p align="center">
-    <img
-      src="./assets/example.png" width="600"
-    />
-</p>
+`index.md` contains:
 
-🤯 All these tutorials are generated **entirely by AI** by crawling the GitHub repo!
+- a short project summary
+- a Mermaid relationship graph
+- ordered chapter links
 
-- [AutoGen Core](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/AutoGen%20Core) - Build AI teams that talk, think, and solve problems together like coworkers!
+The repository also contains previously generated examples under [`docs/`](./docs/), including:
 
-- [Browser Use](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Browser%20Use) - Let AI surf the web for you, clicking buttons and filling forms like a digital assistant!
+- [`docs/Codex/index.md`](./docs/Codex/index.md)
+- [`docs/FastAPI/index.md`](./docs/FastAPI/index.md)
+- [`docs/PocketFlow/index.md`](./docs/PocketFlow/index.md)
+- [`docs/Requests/index.md`](./docs/Requests/index.md)
 
-- [Celery](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Celery) - Supercharge your app with background tasks that run while you sleep!
+## How it works
 
-- [Click](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Click) - Turn Python functions into slick command-line tools with just a decorator!
+```mermaid
+flowchart LR
+    A[Repo URL or Local Dir] --> B[File Crawl]
+    B --> C[Semantic Chunk Inventory]
+    C --> D[Identify Abstractions]
+    D --> E[Analyze Relationships]
+    E --> F[Order Chapters]
+    F --> G[Write Chapters]
+    G --> H[Combine Markdown Tutorial]
+```
 
-- [Codex](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Codex) - Turn plain English into working code with this AI terminal wizard!
+Implementation entry points:
 
-- [Crawl4AI](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Crawl4AI) - Train your AI to extract exactly what matters from any website!
+- [`main.py`](./main.py): CLI entry and shared state setup
+- [`flow.py`](./flow.py): Pocket Flow pipeline wiring
+- [`nodes.py`](./nodes.py): the six pipeline nodes and prompts
+- [`utils/semantic_chunks.py`](./utils/semantic_chunks.py): chunk inventory building and fallback chunking
+- [`tools/code_chunk_adapter.mjs`](./tools/code_chunk_adapter.mjs): Node sidecar for `code-chunk`
+- [`utils/call_llm.py`](./utils/call_llm.py): provider selection, cache, logging, telemetry
 
-- [CrewAI](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/CrewAI) - Assemble a dream team of AI specialists to tackle impossible problems!
+`C0de1ndex/` is present in this repository, but it is not part of the default `main.py -> flow.py -> nodes.py` execution path.
 
-- [DSPy](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/DSPy) - Build LLM apps like Lego blocks that optimize themselves!
+## Requirements
 
-- [FastAPI](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/FastAPI) - Create APIs at lightning speed with automatic docs that clients will love!
+- Python 3.10+
+- `pip`
+- Recommended: Node.js 18+ and `npm`
+- Recommended for SSH repository URLs: Git
 
-- [Flask](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Flask) - Craft web apps with minimal code that scales from prototype to production!
+Install dependencies:
 
-- [Google A2A](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Google%20A2A) - The universal language that lets AI agents collaborate across borders!
+```bash
+pip install -r requirements.txt
+npm install
+```
 
-- [LangGraph](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/LangGraph) - Design AI agents as flowcharts where each step remembers what happened before!
+Notes:
 
-- [LevelDB](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/LevelDB) - Store data at warp speed with Google's engine that powers blockchains!
+- Node.js is recommended, not strictly required. If `node` is not available, the Python pipeline falls back to less precise local chunks.
+- `npm install` is only used for the semantic chunking sidecar through the `code-chunk` package.
 
-- [MCP Python SDK](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/MCP%20Python%20SDK) - Build powerful apps that communicate through an elegant protocol without sweating the details!
+## LLM configuration
 
-- [NumPy Core](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/NumPy%20Core) - Master the engine behind data science that makes Python as fast as C!
+Environment variables are loaded from a local `.env` file via `python-dotenv`.
 
-- [OpenManus](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/OpenManus) - Build AI agents with digital brains that think, learn, and use tools just like humans do!
+### Option 1: Gemini
 
-- [PocketFlow](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/PocketFlow) - 100-line LLM framework. Let Agents build Agents!
+If either `GEMINI_PROJECT_ID` or `GEMINI_API_KEY` is set, the code automatically uses Gemini.
 
-- [Pydantic Core](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Pydantic%20Core) - Validate data at rocket speed with just Python type hints!
+```bash
+GEMINI_API_KEY=your_api_key
+GEMINI_MODEL=gemini-2.5-pro-exp-03-25
+```
 
-- [Requests](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/Requests) - Talk to the internet in Python with code so simple it feels like cheating!
+For Vertex AI:
 
-- [SmolaAgents](https://the-pocket.github.io/PocketFlow-Tutorial-Codebase-Knowledge/SmolaAgents) - Build tiny AI agents that punch way above their weight class!
+```bash
+GEMINI_PROJECT_ID=your_gcp_project
+GEMINI_LOCATION=us-central1
+GEMINI_MODEL=gemini-2.5-pro-exp-03-25
+```
 
-- Showcase Your AI-Generated Tutorials in [Discussions](https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge/discussions)!
+### Option 2: OpenAI-compatible provider
 
-## 🚀 Getting Started
+For non-Gemini providers, the current code expects:
 
-1. Clone this repository
-   ```bash
-   git clone https://github.com/The-Pocket/PocketFlow-Tutorial-Codebase-Knowledge
-   ```
+```bash
+LLM_PROVIDER=OPENROUTER
+OPENROUTER_MODEL=your_model_name
+OPENROUTER_BASE_URL=https://openrouter.ai/api
+OPENROUTER_API_KEY=your_api_key
+```
 
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   npm install
-   ```
+The same shape works for other providers such as `XAI` or `OLLAMA`:
 
-   This project uses a Node.js sidecar for semantic code chunking through the
-   `code-chunk` package, so a working Node.js/npm environment is required in
-   addition to the Python dependencies.
-   For OpenAI-compatible HTTP providers, you can set `LLM_HTTP_TIMEOUT`
-   (seconds, default `120`) to avoid indefinitely waiting on slow upstream
-   responses. Abstraction discovery first asks the LLM to choose candidates from
-   a compact chunk catalog (`identify.compact_plan`), then sends only selected
-   evidence chunks for final refinement (`identify.refine`). If that compact
-   path fails validation, the older batch extraction fallback can still be
-   tuned with `LLM_MAX_EXTRACTION_BATCHES` (default `40`) and
-   `LLM_EXTRACTION_CONCURRENCY` (default `1`), or the matching CLI flags
-   `--max-extraction-batches` and `--llm-extraction-concurrency`. LLM call
-   timing metrics are written as JSONL under `logs/llm_metrics_YYYYMMDD.jsonl`
-   by default; set `LLM_TELEMETRY_FILE` to override the path or
-   `LLM_TELEMETRY=0` to disable it.
+```bash
+LLM_PROVIDER=OLLAMA
+OLLAMA_MODEL=qwen2.5-coder:14b
+OLLAMA_BASE_URL=http://localhost:11434
+```
 
-4. Set up LLM in [`utils/call_llm.py`](./utils/call_llm.py) by providing credentials. To do so, you can put the values in a `.env` file. By default, you can use the AI Studio key with this client for Gemini Pro 2.5 by setting the `GEMINI_API_KEY` environment variable. If you want to use another LLM, you can set the `LLM_PROVIDER` environment variable (e.g. `XAI`), and then set the model, url, and API key (e.g. `XAI_MODEL`, `XAI_URL`,`XAI_API_KEY`). If using Ollama, the url is `http://localhost:11434/` and the API key can be omitted.
-   You can use your own models. We highly recommend the latest models with thinking capabilities (Claude 3.7 with thinking, O1). You can verify that it is correctly set up by running:
-   ```bash
-   python utils/call_llm.py
-   ```
+`<PROVIDER>_API_KEY` is optional for local providers such as Ollama.
 
-5. Generate a complete codebase tutorial by running the main script:
-    ```bash
-    # Analyze a GitHub repository
-    python main.py --repo https://github.com/username/repo --include "*.py" "*.js" --exclude "tests/*" --max-size 50000
+### GitHub token
 
-    # Or, analyze a local directory
-    python main.py --dir /path/to/your/codebase --include "*.py" --exclude "*test*"
+If you analyze private repositories, or want to reduce rate-limit issues for public ones, set:
 
-    # Generate a tutorial in Chinese by default
-    python main.py --repo https://github.com/username/repo
+```bash
+GITHUB_TOKEN=your_github_token
+```
 
-    # Or, override the tutorial language
-    python main.py --repo https://github.com/username/repo --language "English"
-    ```
+### Verify provider setup
 
-    - `--repo` or `--dir` - Specify either a GitHub repo URL or a local directory path (required, mutually exclusive)
-    - `-n, --name` - Project name (optional, derived from URL/directory if omitted)
-    - `-t, --token` - GitHub token (or set GITHUB_TOKEN environment variable)
-    - `-o, --output` - Output directory (default: ./output)
-    - `-i, --include` - Files to include (e.g., "`*.py`" "`*.js`")
-    - `-e, --exclude` - Files to exclude (e.g., "`tests/*`" "`docs/*`")
-    - `-s, --max-size` - Maximum file size in bytes (default: 100KB)
-    - `--language` - Language for the generated tutorial (default: "Chinese")
-    - `--max-abstractions` - Maximum number of abstractions to identify (default: 10)
-    - `--no-cache` - Disable LLM response caching (default: caching enabled)
+```bash
+python utils/call_llm.py
+```
 
-The application will crawl the repository, analyze the codebase structure, generate tutorial content in the specified language, and save the output in the specified directory (default: ./output).
+## Usage
 
+Show CLI help:
 
-<details>
- 
-<summary> 🐳 <b>Running with Docker</b> </summary>
+```bash
+python main.py --help
+```
 
-To run this project in a Docker container, you'll need to pass your API keys as environment variables. 
+Analyze a public GitHub repository:
 
-1. Build the Docker image
-   ```bash
-   docker build -t pocketflow-app .
-   ```
+```bash
+python main.py --repo https://github.com/pallets/flask
+```
 
-2. Run the container
+Analyze a branch or subdirectory URL:
 
-   You'll need to provide your `GEMINI_API_KEY` for the LLM to function. If you're analyzing private GitHub repositories or want to avoid rate limits, also provide your `GITHUB_TOKEN`.
-   
-   Mount a local directory to `/app/output` inside the container to access the generated tutorials on your host machine.
-   
-   **Example for analyzing a public GitHub repository:**
-   
-   ```bash
-   docker run -it --rm \
-     -e GEMINI_API_KEY="YOUR_GEMINI_API_KEY_HERE" \
-     -v "$(pwd)/output_tutorials":/app/output \
-     pocketflow-app --repo https://github.com/username/repo
-   ```
-   
-   **Example for analyzing a local directory:**
-   
-   ```bash
-   docker run -it --rm \
-     -e GEMINI_API_KEY="YOUR_GEMINI_API_KEY_HERE" \
-     -v "/path/to/your/local_codebase":/app/code_to_analyze \
-     -v "$(pwd)/output_tutorials":/app/output \
-     pocketflow-app --dir /app/code_to_analyze
-   ```
-</details>
+```bash
+python main.py --repo https://github.com/langchain-ai/langgraph/tree/main/libs/langgraph
+```
 
-## 💡 Development Tutorial
+Analyze an SSH repository URL:
 
-- I built using [**Agentic Coding**](https://zacharyhuang.substack.com/p/agentic-coding-the-most-fun-way-to), the fastest development paradigm, where humans simply [design](docs/design.md) and agents [code](flow.py).
+```bash
+python main.py --repo git@github.com:owner/private-repo.git --token your_github_token
+```
 
-- The secret weapon is [Pocket Flow](https://github.com/The-Pocket/PocketFlow), a 100-line LLM framework that lets Agents (e.g., Cursor AI) build for you
+Analyze a local directory:
 
-- Check out the Step-by-step YouTube development tutorial:
+```bash
+python main.py --dir /path/to/codebase
+```
 
-<br>
-<div align="center">
-  <a href="https://youtu.be/AFY67zOpbSo" target="_blank">
-    <img src="./assets/youtube_thumbnail.png" width="500" alt="Pocket Flow Codebase Tutorial" style="cursor: pointer;">
-  </a>
-</div>
-<br>
+Generate English output instead of the default Chinese:
+
+```bash
+python main.py --repo https://github.com/pallets/flask --language English
+```
+
+Use custom include and exclude filters:
+
+```bash
+python main.py --dir . --include "*.py" "*.ts" "*.md" --exclude "tests/*" "docs/*"
+```
+
+Write output somewhere else:
+
+```bash
+python main.py --repo https://github.com/pallets/flask --output generated_tutorials
+```
+
+Run the local web console:
+
+```bash
+python -m webapp.server
+```
+
+If `webapp/bin/` is missing the Windows API Code Pack DLLs on a fresh machine, install them once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/install_windows_api_code_pack.ps1
+```
+
+Then open `http://127.0.0.1:8765` in your browser. The web console currently supports:
+
+- opening the native Windows `CommonOpenFileDialog` folder picker from the `分析目录` browse button and filling the selected repository path automatically
+- adding local repository analysis jobs into a queue
+- deleting pending/completed/failed jobs from the queue
+- setting include/exclude patterns and core analysis parameters
+- defaulting output to `<selected_repo>/output`
+- starting the queue and watching per-task logs and output paths
+
+## CLI options
+
+- `--repo`: GitHub repository URL
+- `--dir`: local directory path
+- `-n, --name`: override the derived project name
+- `-t, --token`: GitHub token, otherwise `GITHUB_TOKEN` is used
+- `-o, --output`: base output directory, default `output`
+- `-i, --include`: include glob patterns
+- `-e, --exclude`: exclude glob patterns
+- `-s, --max-size`: max file size in bytes, default `100000`
+- `--language`: tutorial language, default `Chinese`
+- `--max-abstractions`: use `auto` to let the LLM estimate a suitable chapter count, or pass a positive integer to cap the number of tutorial abstractions; default `auto`
+- `--no-cache`: disable prompt-level LLM response caching
+- `--max-extraction-batches`: override bounded extraction batch count
+- `--llm-extraction-concurrency`: override concurrent extraction workers
+
+`--repo` and `--dir` are mutually exclusive, and one of them is required.
+
+## Default file filters
+
+The current defaults are intentionally conservative.
+
+Included by default:
+
+- source files such as `*.py`, `*.js`, `*.ts`, `*.tsx`, `*.go`, `*.java`, `*.c`, `*.cpp`
+- docs and config-like files such as `*.md`, `*.rst`, `*.yaml`, `*.yml`, `*Dockerfile`, `*Makefile`
+
+Excluded by default:
+
+- `assets`, `images`, `public`, `static`, `temp`
+- test folders and test-like files
+- `docs`, `examples`, `dist`, `build`, `legacy`, `experimental`
+- `.git`, `.github`, `.next`, `.vscode`, `node_modules`, virtual environments, logs
+
+If you want to analyze a documentation-heavy repository, pay attention to the default `docs` exclusion and override it explicitly.
+
+## Cache, logs, and tuning
+
+The current code writes and reads these runtime artifacts:
+
+- `llm_cache.json`: prompt-response cache
+- `logs/llm_calls_YYYYMMDD.log`: raw LLM call log
+- `logs/llm_metrics_YYYYMMDD.jsonl`: structured telemetry
+
+Useful environment variables:
+
+- `LOG_DIR`: override the log directory, default `logs`
+- `LLM_HTTP_TIMEOUT`: HTTP timeout in seconds for provider calls, default `120`
+- `LLM_TELEMETRY=0`: disable telemetry file writing
+- `LLM_TELEMETRY_FILE`: custom telemetry file path
+- `LLM_MAX_EXTRACTION_BATCHES`: default extraction batch cap, default `40`
+- `LLM_EXTRACTION_CONCURRENCY`: default extraction concurrency, default `1`
+
+The CLI flags `--max-extraction-batches` and `--llm-extraction-concurrency` override the corresponding environment defaults for a run.
+
+## Testing
+
+Run the current test suite with:
+
+```bash
+python -m unittest discover tests
+```
+
+The tests cover:
+
+- CLI defaults such as the default tutorial language
+- semantic chunk mapping and fallback behavior
+- chunk packing and file-index extraction
+- the compact abstraction-planning and refinement contract
+
+## Docker
+
+A minimal Dockerfile is included:
+
+```bash
+docker build -t tutorial-builder .
+docker run --rm -it -e GEMINI_API_KEY=your_api_key -v "$(pwd)/output":/app/output tutorial-builder --repo https://github.com/pallets/flask
+```
+
+Important caveat:
+
+- the current Dockerfile installs Python dependencies and Git
+- it does not install Node.js or `npm`
+- inside that image, semantic chunking falls back to the Python-side fallback chunks unless you extend the image yourself
+
+## Repository layout
+
+```text
+.
+├─ main.py
+├─ flow.py
+├─ nodes.py
+├─ utils/
+├─ tools/
+├─ tests/
+├─ docs/
+└─ C0de1ndex/
+```
+
+- `docs/` contains generated example tutorials for publishing
+- `tests/fixtures/` contains small polyglot fixtures for chunking tests
+- `C0de1ndex/` is a separate Go-based experiment that is not called by the default Python flow
+
+## License
+
+MIT
 
 
 

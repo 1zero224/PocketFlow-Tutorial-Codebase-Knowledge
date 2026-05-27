@@ -29,6 +29,7 @@ from utils.semantic_chunks import (
     extract_file_indices,
     map_code_chunk_result,
     pack_chunks_for_prompt,
+    run_code_chunk_adapter,
     sort_files_items,
 )
 
@@ -110,6 +111,45 @@ class SemanticChunkTests(unittest.TestCase):
         self.assertEqual(chunks[0]["chunk_kind"], "fallback")
         self.assertIn("server:", chunks[0]["content"])
 
+    @patch("utils.semantic_chunks.shutil.which", return_value="node")
+    @patch("utils.semantic_chunks.subprocess.run")
+    def test_run_code_chunk_adapter_decodes_utf8_bytes_on_windows(self, mock_run, _mock_which):
+        class Completed:
+            returncode = 0
+            stdout = json.dumps(
+                {
+                    "results": [
+                        {
+                            "file_index": 0,
+                            "filepath": "src/中文.py",
+                            "chunks": [],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            stderr = b""
+
+        mock_run.return_value = Completed()
+
+        results = run_code_chunk_adapter([("src/中文.py", "print('你好')")])
+
+        self.assertEqual(results[0]["filepath"], "src/中文.py")
+
+    @patch("utils.semantic_chunks.shutil.which", return_value="node")
+    @patch("utils.semantic_chunks.subprocess.run")
+    def test_run_code_chunk_adapter_handles_missing_stdout_after_decode_failure(self, mock_run, _mock_which):
+        class Completed:
+            returncode = 1
+            stdout = None
+            stderr = None
+
+        mock_run.return_value = Completed()
+
+        results = run_code_chunk_adapter([("src/app.py", "print('ok')")])
+
+        self.assertIn("code-chunk adapter failed", results[0]["error"])
+
     def test_extract_file_indices_from_supporting_chunks(self):
         chunks = [
             {"chunk_id": "a", "file_index": 3},
@@ -171,6 +211,13 @@ class SemanticChunkTests(unittest.TestCase):
         mock_build_chunk_inventory.return_value = fake_chunks
         mock_call_llm.side_effect = [
             """```yaml
+recommended_count: 4
+min_count: 3
+max_count: 6
+reason: |
+  Small repo with one core concept.
+```""",
+            """```yaml
 abstractions:
   - name: |
       Alpha Layer
@@ -200,7 +247,7 @@ abstractions:
             "max_file_size": 10000,
             "language": "english",
             "use_cache": False,
-            "max_abstraction_num": 8,
+            "max_abstraction_num": "auto",
         }
 
         fetch = nodes.FetchRepo()
@@ -211,7 +258,7 @@ abstractions:
         self.assertEqual([path for path, _ in shared["files"]], ["a.py", "b.py"])
         self.assertEqual(
             [call.kwargs["stage"] for call in mock_call_llm.call_args_list],
-            ["identify.compact_plan", "identify.refine"],
+            ["identify.estimate_budget", "identify.compact_plan", "identify.refine"],
         )
         self.assertEqual(
             shared["abstractions"],
@@ -276,6 +323,13 @@ abstractions:
         ]
         mock_call_llm.side_effect = [
             """```yaml
+recommended_count: 5
+min_count: 4
+max_count: 6
+reason: |
+  A few distinct layers need separate chapters.
+```""",
+            """```yaml
 abstractions:
   - name: |
       Model Backbone
@@ -305,19 +359,19 @@ abstractions:
             "project_name": "vision",
             "language": "english",
             "use_cache": False,
-            "max_abstraction_num": 10,
+            "max_abstraction_num": "auto",
             "max_extraction_batches": 40,
             "llm_extraction_concurrency": 1,
         }
 
         abstractions = nodes.IdentifyAbstractions().exec(prep_res)
 
-        self.assertEqual(len(mock_call_llm.call_args_list), 2)
+        self.assertEqual(len(mock_call_llm.call_args_list), 3)
         self.assertEqual(
             [call.kwargs["stage"] for call in mock_call_llm.call_args_list],
-            ["identify.compact_plan", "identify.refine"],
+            ["identify.estimate_budget", "identify.compact_plan", "identify.refine"],
         )
-        refinement_prompt = mock_call_llm.call_args_list[1].args[0]
+        refinement_prompt = mock_call_llm.call_args_list[2].args[0]
         self.assertIn("class Backbone", refinement_prompt)
         self.assertIn("class DatasetLoader", refinement_prompt)
         self.assertNotIn("class DebugTool", refinement_prompt)
@@ -417,6 +471,143 @@ abstractions:
 
         self.assertEqual(prep_res["max_extraction_batches"], 7)
         self.assertEqual(prep_res["llm_extraction_concurrency"], 3)
+
+    @patch("nodes.call_llm")
+    def test_manual_max_abstractions_skips_auto_budget_stage(self, mock_call_llm):
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "file_index": 0,
+                "filepath": "core.py",
+                "language": "python",
+                "engine": "code-chunk",
+                "chunk_kind": "entity",
+                "symbol_path": "Core",
+                "signature": "class Core",
+                "line_range": {"start": 1, "end": 5},
+                "content": "class Core:\n    pass",
+                "context_text": "Core class",
+                "parent_scope": "",
+                "related_imports": [],
+            }
+        ]
+        mock_call_llm.side_effect = [
+            """```yaml
+abstractions:
+  - name: |
+      Core Layer
+    reason: |
+      Main concept.
+    supporting_chunk_ids:
+      - c1
+```""",
+            """```yaml
+abstractions:
+  - name: |
+      Core Layer
+    description: |
+      Explains the core layer.
+    file_indices:
+      - 0 # core.py
+    supporting_chunk_ids:
+      - c1
+```""",
+        ]
+        prep_res = {
+            "chunk_inventory": chunks,
+            "file_count": 1,
+            "project_name": "coreproj",
+            "language": "english",
+            "use_cache": False,
+            "max_abstraction_num": 4,
+            "requested_max_abstraction_num": 4,
+            "max_extraction_batches": 40,
+            "llm_extraction_concurrency": 1,
+        }
+
+        abstractions = nodes.IdentifyAbstractions().exec(prep_res)
+
+        self.assertEqual(
+            [call.kwargs["stage"] for call in mock_call_llm.call_args_list],
+            ["identify.compact_plan", "identify.refine"],
+        )
+        self.assertEqual(
+            abstractions,
+            [
+                {
+                    "name": "Core Layer",
+                    "description": "Explains the core layer.",
+                    "files": [0],
+                }
+            ],
+        )
+
+    @patch("nodes.call_llm")
+    def test_auto_budget_is_clamped_before_planning(self, mock_call_llm):
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "file_index": 0,
+                "filepath": "entry.py",
+                "language": "python",
+                "engine": "code-chunk",
+                "chunk_kind": "entity",
+                "symbol_path": "entry",
+                "signature": "def entry()",
+                "line_range": {"start": 1, "end": 2},
+                "content": "def entry():\n    pass",
+                "context_text": "Entry function",
+                "parent_scope": "",
+                "related_imports": [],
+            }
+        ]
+        mock_call_llm.side_effect = [
+            """```yaml
+recommended_count: 20
+min_count: 8
+max_count: 20
+reason: |
+  Overestimates on purpose.
+```""",
+            """```yaml
+abstractions:
+  - name: |
+      Entry Layer
+    reason: |
+      Entry point.
+    supporting_chunk_ids:
+      - c1
+```""",
+            """```yaml
+abstractions:
+  - name: |
+      Entry Layer
+    description: |
+      Explains the entry point.
+    file_indices:
+      - 0 # entry.py
+    supporting_chunk_ids:
+      - c1
+```""",
+        ]
+        prep_res = {
+            "chunk_inventory": chunks,
+            "file_count": 1,
+            "project_name": "entryproj",
+            "language": "english",
+            "use_cache": False,
+            "max_abstraction_num": "auto",
+            "requested_max_abstraction_num": "auto",
+            "max_extraction_batches": 40,
+            "llm_extraction_concurrency": 1,
+        }
+
+        nodes.IdentifyAbstractions().exec(prep_res)
+
+        self.assertEqual(
+            mock_call_llm.call_args_list[1].kwargs["metadata"]["max_abstraction_num"],
+            12,
+        )
 
     def test_parallel_extraction_preserves_batch_order(self):
         class ParallelProbeIdentify(nodes.IdentifyAbstractions):

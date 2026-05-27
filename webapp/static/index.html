@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>仓库分析任务控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Pocket Flow 本地控制台</p>
+          <h1>仓库分析任务控制台</h1>
+          <p class="hero-text">
+            选择本地仓库目录，调整分析参数，加入任务队列，再统一启动顺序执行。
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="metric">
+            <span class="metric-label">执行模式</span>
+            <strong id="queue-mode">待机</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">当前任务</span>
+            <strong id="active-task">无</strong>
+          </div>
+          <button id="start-queue-button" class="primary-button">
+            启动任务队列
+          </button>
+        </div>
+      </header>
+
+      <main class="dashboard-grid">
+        <section class="panel form-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">步骤 1</p>
+              <h2>加入任务队列</h2>
+            </div>
+          </div>
+
+          <form id="task-form">
+            <label class="field">
+              <span>分析目录</span>
+              <div class="input-with-button">
+                <input id="source-path" name="source_path" type="text" readonly />
+                <button id="pick-folder-button" type="button" class="secondary-button field-action-button">浏览</button>
+              </div>
+            </label>
+            <div id="current-path-label" class="path-pill">尚未选择目录</div>
+            <p class="helper-text">点击“浏览”后，会弹出系统原生目录选择窗口（通过 Python tkinter 调用），选中后自动回填完整路径。</p>
+
+            <div class="field-row">
+              <label class="field">
+                <span>项目名</span>
+                <input id="project-name" name="project_name" type="text" placeholder="留空则自动推导" />
+              </label>
+              <label class="field">
+                <span>输出目录</span>
+                <input id="output-dir" name="output_dir" type="text" />
+              </label>
+            </div>
+
+            <div class="field-row">
+              <label class="field">
+                <span>语言</span>
+                <input id="language" name="language" type="text" />
+              </label>
+              <label class="field checkbox-field">
+                <span>缓存</span>
+                <input id="use-cache" name="use_cache" type="checkbox" checked />
+              </label>
+            </div>
+
+            <div class="field-row triple">
+              <label class="field">
+                <span>最大文件大小</span>
+                <input id="max-file-size" name="max_file_size" type="number" min="1" />
+              </label>
+              <label class="field">
+                <span>最大抽象数</span>
+                <input
+                  id="max-abstractions"
+                  name="max_abstraction_num"
+                  type="text"
+                  placeholder="自动或正整数"
+                />
+              </label>
+              <label class="field">
+                <span>批次并发</span>
+                <input id="llm-concurrency" name="llm_extraction_concurrency" type="number" min="1" placeholder="留空沿用默认" />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>最大抽取批次数</span>
+              <input id="max-batches" name="max_extraction_batches" type="number" min="1" placeholder="留空沿用默认" />
+            </label>
+
+            <label class="field">
+              <span>包含规则</span>
+              <textarea id="include-patterns" name="include_patterns" rows="6"></textarea>
+            </label>
+
+            <label class="field">
+              <span>排除规则</span>
+              <textarea id="exclude-patterns" name="exclude_patterns" rows="6"></textarea>
+            </label>
+
+            <div class="form-footer">
+              <button type="submit" class="primary-button">添加到任务队列</button>
+              <p id="form-message" class="form-message"></p>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel queue-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">步骤 2</p>
+              <h2>任务队列</h2>
+            </div>
+            <div class="queue-stats">
+              <span id="pending-count">0 待执行</span>
+              <span id="completed-count">0 已完成</span>
+              <span id="failed-count">0 失败</span>
+            </div>
+          </div>
+
+          <div id="task-list" class="task-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

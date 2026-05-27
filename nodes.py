@@ -24,6 +24,10 @@ LLM_PLANNER_MAX_CATALOG_CHARS = 60000
 MAX_LLM_EXTRACTION_BATCHES = 40
 DEFAULT_LLM_EXTRACTION_CONCURRENCY = 1
 DEFAULT_TUTORIAL_LANGUAGE = "Chinese"
+DEFAULT_MAX_ABSTRACTIONS = 10
+DEFAULT_MAX_ABSTRACTIONS_MODE = "auto"
+MIN_AUTO_ABSTRACTIONS = 3
+MAX_AUTO_ABSTRACTIONS = 12
 
 
 def _positive_int(value, default):
@@ -36,6 +40,21 @@ def _positive_int(value, default):
 
 def _env_positive_int(name, default):
     return _positive_int(os.getenv(name), default)
+
+
+def _normalize_max_abstractions(value):
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if not raw or raw == DEFAULT_MAX_ABSTRACTIONS_MODE:
+            return DEFAULT_MAX_ABSTRACTIONS_MODE
+        return _positive_int(raw, DEFAULT_MAX_ABSTRACTIONS)
+    if value is None:
+        return DEFAULT_MAX_ABSTRACTIONS_MODE
+    return _positive_int(value, DEFAULT_MAX_ABSTRACTIONS)
+
+
+def _clamp_auto_abstraction_target(value):
+    return max(MIN_AUTO_ABSTRACTIONS, min(int(value), MAX_AUTO_ABSTRACTIONS))
 
 
 def _extraction_metadata(
@@ -138,7 +157,9 @@ class IdentifyAbstractions(Node):
         project_name = shared["project_name"]  # Get project name
         language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE)  # Get language
         use_cache = shared.get("use_cache", True)  # Get use_cache flag, default to True
-        max_abstraction_num = shared.get("max_abstraction_num", 10)  # Get max_abstraction_num, default to 10
+        max_abstraction_num = _normalize_max_abstractions(
+            shared.get("max_abstraction_num", DEFAULT_MAX_ABSTRACTIONS_MODE)
+        )
         max_extraction_batches = _positive_int(
             shared.get("max_extraction_batches"),
             _env_positive_int("LLM_MAX_EXTRACTION_BATCHES", MAX_LLM_EXTRACTION_BATCHES),
@@ -159,6 +180,7 @@ class IdentifyAbstractions(Node):
             "language": language,
             "use_cache": use_cache,
             "max_abstraction_num": max_abstraction_num,
+            "requested_max_abstraction_num": max_abstraction_num,
             "max_extraction_batches": max_extraction_batches,
             "llm_extraction_concurrency": llm_extraction_concurrency,
         }
@@ -169,12 +191,22 @@ class IdentifyAbstractions(Node):
         project_name = prep_res["project_name"]
         language = prep_res["language"]
         use_cache = prep_res["use_cache"]
-        max_abstraction_num = prep_res["max_abstraction_num"]
+        requested_max_abstraction_num = prep_res.get(
+            "requested_max_abstraction_num",
+            prep_res["max_abstraction_num"],
+        )
         max_extraction_batches = prep_res.get(
             "max_extraction_batches", MAX_LLM_EXTRACTION_BATCHES
         )
         llm_extraction_concurrency = prep_res.get(
             "llm_extraction_concurrency", DEFAULT_LLM_EXTRACTION_CONCURRENCY
+        )
+        max_abstraction_num = self._resolve_abstraction_budget(
+            project_name,
+            chunk_inventory,
+            language,
+            use_cache,
+            requested_max_abstraction_num,
         )
 
         print(f"Identifying abstractions using LLM...")
@@ -242,6 +274,60 @@ class IdentifyAbstractions(Node):
             use_cache,
             max_abstraction_num,
         )
+
+    def _resolve_abstraction_budget(
+        self,
+        project_name,
+        chunk_inventory,
+        language,
+        use_cache,
+        requested_max_abstraction_num,
+    ):
+        if requested_max_abstraction_num != DEFAULT_MAX_ABSTRACTIONS_MODE:
+            resolved = _positive_int(
+                requested_max_abstraction_num,
+                DEFAULT_MAX_ABSTRACTIONS,
+            )
+            print(f"Using user-specified abstraction cap: {resolved}")
+            return resolved
+
+        estimated = self._estimate_auto_abstraction_budget(
+            project_name,
+            chunk_inventory,
+            language,
+            use_cache,
+        )
+        resolved = _clamp_auto_abstraction_target(estimated)
+        print(
+            f"Auto-selected abstraction cap: {resolved} "
+            f"(estimated {estimated}, clamp {MIN_AUTO_ABSTRACTIONS}-{MAX_AUTO_ABSTRACTIONS})"
+        )
+        return resolved
+
+    def _estimate_auto_abstraction_budget(
+        self,
+        project_name,
+        chunk_inventory,
+        language,
+        use_cache,
+    ):
+        prompt = _auto_abstraction_budget_prompt(
+            project_name,
+            chunk_inventory,
+            language,
+        )
+        response = call_llm(
+            prompt,
+            use_cache=(use_cache and self.cur_retry == 0),
+            stage="identify.estimate_budget",
+            metadata={
+                "project_name": project_name,
+                "chunk_count": len(chunk_inventory),
+                "auto_bounds": [MIN_AUTO_ABSTRACTIONS, MAX_AUTO_ABSTRACTIONS],
+            },
+        )
+        data = _load_yaml_block(response)
+        return _validate_auto_abstraction_budget(data)
 
     def _identify_with_batch_fallback(
         self,
@@ -656,6 +742,17 @@ def _validate_batches(batches, valid_chunk_ids):
     return validated
 
 
+def _validate_auto_abstraction_budget(data):
+    if not isinstance(data, dict):
+        raise ValueError("Auto abstraction budget output must be a mapping")
+    if "recommended_count" not in data:
+        raise ValueError("Auto abstraction budget missing recommended_count")
+    recommended = _positive_int(data.get("recommended_count"), None)
+    if recommended is None:
+        raise ValueError("Auto abstraction budget recommended_count must be positive")
+    return recommended
+
+
 def _validate_compact_plan(candidates, chunks, max_abstraction_num):
     if not isinstance(candidates, list):
         raise ValueError("Compact planning output missing abstractions list")
@@ -717,6 +814,37 @@ def _format_compact_plan_for_prompt(plan):
             )
         )
     return "abstractions:\n" + "\n".join(blocks)
+
+
+def _auto_abstraction_budget_prompt(project_name, chunk_inventory, language):
+    language_instruction = ""
+    if language.lower() != "english":
+        language_instruction = (
+            f"The tutorial itself will be written in {language.capitalize()}, "
+            "but keep this planning output in English.\n\n"
+        )
+    return f"""
+For the project `{project_name}`, estimate how many tutorial abstractions should be written as top-level chapters.
+
+Compact catalog:
+{build_compact_chunk_catalog(chunk_inventory)}
+
+{language_instruction}Choose a practical chapter count for onboarding.
+Favor a count that is:
+- Broad enough to cover the core architecture
+- Small enough to avoid thin or repetitive chapters
+- Usually between {MIN_AUTO_ABSTRACTIONS} and {MAX_AUTO_ABSTRACTIONS}
+
+Return YAML in this format:
+
+```yaml
+recommended_count: 6
+min_count: 4
+max_count: 8
+reason: |
+  The project has a few distinct subsystems and six chapters keeps them focused without over-splitting.
+```
+"""
 
 
 def _compact_refinement_prompt(
@@ -1330,7 +1458,7 @@ class CombineTutorial(Node):
     def prep(self, shared):
         project_name = shared["project_name"]
         output_base_dir = shared.get("output_dir", "output")  # Default output dir
-        output_path = os.path.join(output_base_dir, project_name)
+        output_path = output_base_dir  # Use base dir directly as the output dir
         repo_url = shared.get("repo_url")  # Get the repository URL
         # language = shared.get("language", DEFAULT_TUTORIAL_LANGUAGE) # No longer needed for fixed strings
 

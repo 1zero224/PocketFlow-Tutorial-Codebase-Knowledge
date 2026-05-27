@@ -44,7 +44,7 @@ This project primarily uses a **Workflow** pattern to decompose the tutorial gen
 ### Flow high-level Design:
 
 1.  **`FetchRepo`**: Crawls the specified GitHub repository URL or local directory using appropriate utility (`crawl_github_files` or `crawl_local_files`), retrieving relevant source code file contents.
-2.  **`IdentifyAbstractions`**: Builds an internal semantic chunk inventory, plans chunk batches with an LLM, and extracts up to 10 middle-level code abstractions that map to symbols, scopes, module wiring, routing, configuration, or orchestration. It still outputs beginner-friendly descriptions (potentially translated if language != English) and the *indices* of files related to each abstraction.
+2.  **`IdentifyAbstractions`**: Builds an internal semantic chunk inventory, lets the LLM estimate a suitable chapter budget by default, then plans and refines middle-level code abstractions that map to symbols, scopes, module wiring, routing, configuration, or orchestration. A caller can still override the budget with an explicit positive integer cap. It still outputs beginner-friendly descriptions (potentially translated if language != English) and the *indices* of files related to each abstraction.
 3.  **`AnalyzeRelationships`**: Uses an LLM to analyze the identified abstractions (referenced by index) and their related code to generate a high-level project summary and describe the relationships/interactions between these abstractions (summary and labels potentially translated if language != English), specifying *source* and *target* abstraction indices and a concise label for each interaction.
 4.  **`OrderChapters`**: Determines the most logical order (as indices) to present the abstractions in the tutorial, considering input context which might be translated. The output order itself is language-independent.
 5.  **`WriteChapters` (BatchNode)**: Iterates through the ordered list of abstraction indices. For each abstraction, it calls an LLM to write a detailed, beginner-friendly chapter (content potentially fully translated if language != English), using the relevant code files (accessed via indices) and summaries of previously generated chapters (potentially translated) as context.
@@ -93,7 +93,7 @@ shared = {
     "local_dir": None, # Provided by the user/main script if using local directory
     "project_name": None, # Optional, derived from repo_url/local_dir if not provided
     "github_token": None, # Optional, from argument or environment variable
-    "output_dir": "output", # Default or user-specified base directory for output
+    "output_dir": "pf_guide", # Default or user-specified output directory
     "include_patterns": set(), # File patterns to include
     "exclude_patterns": set(), # File patterns to exclude
     "max_file_size": 100000, # Default or user-specified max file size
@@ -108,7 +108,7 @@ shared = {
      },
     "chapter_order": [], # Output of OrderChapters: List of indices into shared["abstractions"], determining tutorial order
     "chapters": [], # Output of WriteChapters: List of chapter content strings (Markdown, potentially translated), ordered according to chapter_order
-    "final_output_dir": None # Output of CombineTutorial: Path to the final generated tutorial directory (e.g., "output/my_project")
+    "final_output_dir": None # Output of CombineTutorial: Path to the final generated tutorial directory (e.g., "pf_guide")
 }
 ```
 
@@ -129,7 +129,7 @@ shared = {
     *   *Type*: Regular
     *   *Steps*:
         *   `prep`: Read `files` (list of tuples), `project_name`, and `language` from shared store. Build an internal semantic chunk inventory using `code-chunk` through the Node.js adapter, plus local misc/fallback chunks for glue code and unsupported files. This inventory is internal and is not written into the public shared store.
-        *   `exec`: For small inventories only, build a lightweight chunk catalog and ask the LLM to group existing chunk ids into semantic batches. For large inventories or oversized catalogs, skip global LLM planning and use deterministic bounded planning that groups by path/scope, ranks high-signal entry/config/routing/service/model chunks, and caps the number of extraction batches. Then ask the LLM to extract batch-local middle-level abstractions, each with `name`, `description`, `file_indices`, and internal `supporting_chunk_ids`. Validate chunk ids and file indices, infer file indices from supporting chunks when needed, merge duplicates, and cap the result to `max_abstraction_num`.
+        *   `exec`: Resolve an abstraction budget first. By default, build a lightweight compact catalog and ask the LLM to recommend a practical chapter count, then clamp that recommendation into a safe range. If the caller provided `max_abstraction_num`, use that explicit cap instead. Next, use the compact catalog path to select a small set of tutorial-worthy abstractions and refine them with only the chosen evidence chunks. If compact planning or refinement fails validation, fall back to deterministic bounded batch planning plus batch-local abstraction extraction. Validate chunk ids and file indices, infer file indices from supporting chunks when needed, merge duplicates, and cap the final result to the resolved budget.
         *   `post`: Write only the validated public list of `abstractions` (e.g., `[{"name": "Node", "description": "...", "files": [0, 3, 5]}, ...]`) containing file *indices* and potentially translated `name`/`description` to the shared store. Internal `supporting_chunk_ids` are discarded so downstream nodes keep the existing contract.
 
 3.  **`AnalyzeRelationships`**

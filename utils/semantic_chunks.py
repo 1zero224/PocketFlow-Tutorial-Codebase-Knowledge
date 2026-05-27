@@ -57,8 +57,7 @@ def run_code_chunk_adapter(files_data):
     try:
         proc = subprocess.run(
             [node_path, str(adapter_path)],
-            input=json.dumps(payload),
-            text=True,
+            input=json.dumps(payload).encode("utf-8"),
             capture_output=True,
             check=False,
         )
@@ -70,8 +69,9 @@ def run_code_chunk_adapter(files_data):
         message = _adapter_failure_message(proc)
         return [_adapter_error(i, path, message) for i, (path, _) in enumerate(files_data)]
 
+    stdout_text = _decode_subprocess_stream(proc.stdout)
     try:
-        decoded = json.loads(proc.stdout)
+        decoded = json.loads(stdout_text)
     except json.JSONDecodeError as exc:
         message = f"code-chunk adapter returned invalid JSON: {exc}"
         return [_adapter_error(i, path, message) for i, (path, _) in enumerate(files_data)]
@@ -256,14 +256,23 @@ def _adapter_error(file_index, path, message):
 
 
 def _adapter_failure_message(proc):
+    stdout_text = _decode_subprocess_stream(proc.stdout)
     try:
-        decoded = json.loads(proc.stdout)
+        decoded = json.loads(stdout_text)
         if decoded.get("error"):
             return decoded["error"]
     except json.JSONDecodeError:
         pass
-    stderr = proc.stderr.strip()
+    stderr = _decode_subprocess_stream(proc.stderr).strip()
     return stderr or "code-chunk adapter failed; run npm install and ensure Node.js is available"
+
+
+def _decode_subprocess_stream(value):
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def _to_one_based_range(line_range):

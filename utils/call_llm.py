@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 from google import genai
 import os
 import logging
@@ -28,6 +32,42 @@ logger.addHandler(file_handler)
 cache_file = "llm_cache.json"
 _cache_lock = threading.RLock()
 _telemetry_lock = threading.Lock()
+
+# ── Token usage tracking ──────────────────────────────────────────────
+
+
+@dataclass
+class UsageRecord:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+_usage_accumulator = UsageRecord()
+_usage_lock = threading.Lock()
+
+
+def _accumulate_usage(prompt_tokens: int, completion_tokens: int) -> None:
+    with _usage_lock:
+        _usage_accumulator.prompt_tokens += prompt_tokens
+        _usage_accumulator.completion_tokens += completion_tokens
+
+
+def get_usage_summary() -> dict:
+    """Return accumulated usage snapshot as a dict."""
+    with _usage_lock:
+        pt = _usage_accumulator.prompt_tokens
+        ct = _usage_accumulator.completion_tokens
+        return {
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": pt + ct,
+        }
+
+
+def reset_usage() -> None:
+    with _usage_lock:
+        _usage_accumulator.prompt_tokens = 0
+        _usage_accumulator.completion_tokens = 0
 
 
 def load_cache():
@@ -100,6 +140,8 @@ def _record_llm_telemetry(
     success,
     metadata=None,
     error=None,
+    prompt_tokens=None,
+    completion_tokens=None,
 ):
     if not _telemetry_enabled():
         return
@@ -116,6 +158,10 @@ def _record_llm_telemetry(
         "success": bool(success),
         "metadata": metadata or {},
     }
+    if prompt_tokens is not None:
+        event["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        event["completion_tokens"] = completion_tokens
     if error:
         event["error"] = str(error)
 
@@ -143,6 +189,8 @@ def _record_call_telemetry(
     success,
     metadata,
     error=None,
+    prompt_tokens=None,
+    completion_tokens=None,
 ):
     _record_llm_telemetry(
         stage=stage,
@@ -155,6 +203,8 @@ def _record_call_telemetry(
         success=success,
         metadata=metadata,
         error=error,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
@@ -168,7 +218,7 @@ def _call_context(prompt, stage, metadata):
     }
 
 
-def _record_context_telemetry(context, provider, model, cache_hit, success, error=None):
+def _record_context_telemetry(context, provider, model, cache_hit, success, error=None, prompt_tokens=None, completion_tokens=None):
     _record_call_telemetry(
         context["stage"],
         context["prompt"],
@@ -180,6 +230,8 @@ def _record_context_telemetry(context, provider, model, cache_hit, success, erro
         success,
         context["metadata"],
         error=error,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
@@ -191,7 +243,7 @@ def get_llm_provider():
     return provider
 
 
-def _call_llm_provider(prompt: str) -> str:
+def _call_llm_provider(prompt: str) -> tuple[str, int, int]:
     """
     Call an LLM provider based on environment variables.
     Environment variables:
@@ -234,11 +286,17 @@ def _call_llm_provider(prompt: str) -> str:
     if api_key:  # Only add Authorization header if API key is provided
         headers["Authorization"] = f"Bearer {api_key}"
 
-    payload = {
+    payload: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
     }
+
+    # DeepSeek V4 enables thinking mode by default; pass explicit params for clarity & control
+    if provider == "DEEPSEEK":
+        payload["thinking"] = {"type": "enabled"}
+        payload["reasoning_effort"] = "high"
+        # temperature/top_p/presence_penalty/frequency_penalty are ignored in thinking mode
 
     timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "120"))
 
@@ -248,7 +306,10 @@ def _call_llm_provider(prompt: str) -> str:
         logger.info("RESPONSE:\n%s", json.dumps(response_json, indent=2))
         #logger.info(f"RESPONSE: {response.json()}")
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        usage = response_json.get("usage", {})
+        pt = usage.get("prompt_tokens", 0) or 0
+        ct = usage.get("completion_tokens", 0) or 0
+        return response_json["choices"][0]["message"]["content"], pt, ct
     except requests.exceptions.HTTPError as e:
         error_message = f"HTTP error occurred: {e}"
         try:
@@ -292,7 +353,7 @@ def call_llm(
                 _record_context_telemetry(context, provider, model, True, True)
                 return response_text
 
-        response_text = _dispatch_llm_call(prompt, provider)
+        response_text, pt, ct = _dispatch_llm_call(prompt, provider)
 
         # Log the response
         logger.info(f"RESPONSE: {response_text}")
@@ -301,14 +362,15 @@ def call_llm(
         if use_cache:
             _save_cached_response(prompt, response_text)
 
-        _record_context_telemetry(context, provider, model, False, True)
+        _accumulate_usage(pt, ct)
+        _record_context_telemetry(context, provider, model, False, True, prompt_tokens=pt, completion_tokens=ct)
         return response_text
     except Exception as exc:
         _record_context_telemetry(context, provider, model, False, False, error=exc)
         raise
 
 
-def _call_llm_gemini(prompt: str) -> str:
+def _call_llm_gemini(prompt: str) -> tuple[str, int, int]:
     if os.getenv("GEMINI_PROJECT_ID"):
         client = genai.Client(
             vertexai=True,
@@ -324,7 +386,11 @@ def _call_llm_gemini(prompt: str) -> str:
         model=model,
         contents=[prompt]
     )
-    return response.text
+    pt = ct = 0
+    if response.usage_metadata:
+        pt = response.usage_metadata.prompt_token_count or 0
+        ct = response.usage_metadata.candidates_token_count or 0
+    return response.text, pt, ct
 
 if __name__ == "__main__":
     test_prompt = "Hello, how are you?"
