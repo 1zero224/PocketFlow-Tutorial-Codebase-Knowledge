@@ -164,10 +164,10 @@ For comprehensive, in-depth documentation, use the `--deep` flag:
 python main.py --repo https://github.com/username/repo --deep
 ```
 
-This mode generates **10x more detailed documentation** with:
+This mode enriches documentation with:
 
 - **Deep Abstraction Analysis**: Design motivation, trade-offs, alternatives, and improvements for each concept
-- **Design Pattern Analysis**: Identification and explanation of all design patterns used
+- **Design Decision Analysis**: Architectural decisions, rationale, and impact for each abstraction (patterns noted where applicable but not required)
 - **Architecture Overview**: Multiple Mermaid diagrams showing system architecture, data flow, and dependencies
 - **Code Walkthroughs**: Line-by-line explanations of key files
 - **Enhanced Chapters**: Each chapter includes origin, background, real-world examples, pitfalls, best practices, and advanced topics

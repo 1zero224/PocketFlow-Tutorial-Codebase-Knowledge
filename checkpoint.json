@@ -1,0 +1,258 @@
+{
+  "gpt-researcher": {
+    "rel_path": "stages/stage-2/repos/gpt-researcher",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T10:40:12.110389"
+  },
+  "open_deep_research": {
+    "rel_path": "stages/stage-2/repos/open_deep_research",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T08:20:49.635042"
+  },
+  "storm": {
+    "rel_path": "stages/stage-2/repos/storm",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T08:19:51.094307"
+  },
+  "khoj": {
+    "rel_path": "stages/stage-2/repos/khoj",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T09:15:11.934247"
+  },
+  "onyx": {
+    "rel_path": "stages/stage-2/repos/onyx",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T09:15:10.362847"
+  },
+  "anything-llm": {
+    "rel_path": "stages/stage-2/repos/anything-llm",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T08:09:13.779753"
+  },
+  "ragflow": {
+    "rel_path": "stages/stage-2/repos/ragflow",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T10:40:11.027543"
+  },
+  "mem0": {
+    "rel_path": "stages/stage-2/repos/mem0",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T08:46:27.723435"
+  },
+  "letta": {
+    "rel_path": "stages/stage-2/repos/letta",
+    "stage": "stage-2",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T09:16:12.268752"
+  },
+  "learn-claude-code": {
+    "rel_path": "stages/stage-3/repos/learn-claude-code",
+    "stage": "stage-3",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T09:24:32.092970"
+  },
+  "claw0": {
+    "rel_path": "stages/stage-3/repos/claw0",
+    "stage": "stage-3",
+    "status": "done",
+    "reason": "",
+    "retries": 0,
+    "updated": "2026-05-28T06:15:22.861998"
+  },
+  "hello-agents": {
+    "rel_path": "stages/stage-3/repos/hello-agents",
+    "stage": "stage-3",
+    "status": "error",
+    "reason": "Failed after 10 attempts",
+    "retries": 9,
+    "updated": "2026-05-28T09:26:07.894206"
+  },
+  "openclaw": {
+    "rel_path": "stages/stage-3/repos/openclaw",
+    "stage": "stage-3",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T08:46:27.723435"
+  },
+  "hermes-agent": {
+    "rel_path": "stages/stage-3/repos/hermes-agent",
+    "stage": "stage-3",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T09:15:10.362847"
+  },
+  "CyberClaw": {
+    "rel_path": "stages/stage-3/repos/CyberClaw",
+    "stage": "stage-3",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T09:15:11.934247"
+  },
+  "langgraph": {
+    "rel_path": "stages/stage-3/repos/langgraph",
+    "stage": "stage-3",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T09:16:12.268752"
+  },
+  "openai-agents-python": {
+    "rel_path": "stages/stage-4/repos/openai-agents-python",
+    "stage": "stage-4",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T09:24:32.092970"
+  },
+  "browser-use": {
+    "rel_path": "stages/stage-6/repos/browser-use",
+    "stage": "stage-6",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T09:26:07.894206"
+  },
+  "UI-TARS-desktop": {
+    "rel_path": "stages/stage-6/repos/UI-TARS-desktop",
+    "stage": "stage-6",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T10:40:11.034939"
+  },
+  "codex": {
+    "rel_path": "resources/codex",
+    "stage": "resources",
+    "status": "running",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T10:40:12.113195"
+  },
+  "opencode": {
+    "rel_path": "resources/opencode",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "OpenHands": {
+    "rel_path": "resources/OpenHands",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "SWE-agent": {
+    "rel_path": "resources/SWE-agent",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 5 attempts",
+    "retries": 4,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "pi": {
+    "rel_path": "resources/pi",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 4 attempts",
+    "retries": 3,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "deer-flow": {
+    "rel_path": "resources/deer-flow",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "smolagents": {
+    "rel_path": "resources/smolagents",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "HelloAgents": {
+    "rel_path": "resources/HelloAgents",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "GenAI_Agents": {
+    "rel_path": "resources/GenAI_Agents",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "agents-towards-production": {
+    "rel_path": "resources/agents-towards-production",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "Qwen-Agent": {
+    "rel_path": "resources/Qwen-Agent",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "ai-agents-for-beginners": {
+    "rel_path": "resources/ai-agents-for-beginners",
+    "stage": "resources",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  },
+  "autogen": {
+    "rel_path": "legacy/autogen",
+    "stage": "legacy",
+    "status": "pending",
+    "reason": "Failed after 1 attempts",
+    "retries": 0,
+    "updated": "2026-05-28T06:17:33.729597"
+  }
+}

@@ -741,9 +741,11 @@ abstractions:
         }
         mock_post.return_value.raise_for_status.return_value = None
 
-        result = call_llm_module._call_llm_provider("hello")
+        result, prompt_tokens, completion_tokens = call_llm_module._call_llm_provider("hello")
 
         self.assertEqual(result, "ok")
+        self.assertEqual(prompt_tokens, 0)
+        self.assertEqual(completion_tokens, 0)
         self.assertEqual(mock_post.call_args.kwargs["timeout"], 17.0)
 
 

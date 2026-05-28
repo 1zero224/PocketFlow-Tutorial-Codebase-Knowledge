@@ -27,7 +27,7 @@ DEFAULT_TUTORIAL_LANGUAGE = "Chinese"
 DEFAULT_MAX_ABSTRACTIONS = 10
 DEFAULT_MAX_ABSTRACTIONS_MODE = "auto"
 MIN_AUTO_ABSTRACTIONS = 3
-MAX_AUTO_ABSTRACTIONS = 12
+MAX_AUTO_ABSTRACTIONS = 30
 
 
 def _positive_int(value, default):
@@ -241,9 +241,8 @@ class IdentifyAbstractions(Node):
         return validated_abstractions
 
     def post(self, shared, prep_res, exec_res):
-        shared["abstractions"] = (
-            exec_res  # List of {"name": str, "description": str, "files": [int]}
-        )
+        shared["abstractions"] = exec_res
+        shared["chunk_inventory"] = prep_res["chunk_inventory"]
 
     def _identify_with_compact_catalog(
         self,
@@ -692,6 +691,7 @@ abstractions:
                     "name": name.strip(),
                     "description": description.strip(),
                     "files": file_indices,
+                    "supporting_chunk_ids": supporting_ids,
                 }
             )
             if len(merged) >= max_abstraction_num:
@@ -816,35 +816,102 @@ def _format_compact_plan_for_prompt(plan):
     return "abstractions:\n" + "\n".join(blocks)
 
 
+def _compute_project_stats(chunk_inventory):
+    """Extract quantitative scale metrics from the chunk inventory."""
+    file_indices = set()
+    top_dirs = set()
+    entity_count = 0
+    function_count = 0
+
+    for chunk in chunk_inventory:
+        file_indices.add(chunk.get("file_index"))
+        filepath = chunk.get("filepath", "")
+        top_dir = filepath.split("/")[0] if "/" in filepath else "."
+        top_dirs.add(top_dir)
+        kind = chunk.get("chunk_kind", "")
+        if kind == "entity":
+            entity_count += 1
+        elif kind == "function":
+            function_count += 1
+
+    return {
+        "total_chunks": len(chunk_inventory),
+        "unique_files": len(file_indices),
+        "top_modules": len(top_dirs),
+        "entity_chunks": entity_count,
+        "function_chunks": function_count,
+    }
+
+
 def _auto_abstraction_budget_prompt(project_name, chunk_inventory, language):
+    stats = _compute_project_stats(chunk_inventory)
+
     language_instruction = ""
     if language.lower() != "english":
         language_instruction = (
             f"The tutorial itself will be written in {language.capitalize()}, "
             "but keep this planning output in English.\n\n"
         )
+
+    # Build scale-aware guidance
+    files = stats["unique_files"]
+    chunks_n = stats["total_chunks"]
+    modules = stats["top_modules"]
+    entities = stats["entity_chunks"]
+
+    scale_hint = ""
+    if files < 20 and chunks_n < 100:
+        scale_hint = (
+            "This is a SMALL project. A focused tutorial with 3-6 chapters is appropriate."
+        )
+    elif files < 80 and chunks_n < 400:
+        scale_hint = (
+            "This is a MEDIUM project. A thorough tutorial typically needs 8-15 chapters "
+            "to cover the architecture without gaps."
+        )
+    elif files < 200 and chunks_n < 1000:
+        scale_hint = (
+            "This is a LARGE project. Expect 15-22 chapters to provide adequate coverage "
+            "of the major subsystems and design decisions."
+        )
+    else:
+        scale_hint = (
+            "This is a VERY LARGE project. A comprehensive tutorial likely requires "
+            "20-30 chapters. Do not under-count — missing a major subsystem is worse "
+            "than having a few focused chapters."
+        )
+
     return f"""
-For the project `{project_name}`, estimate how many tutorial abstractions should be written as top-level chapters.
+For the project `{project_name}`, determine how many tutorial abstractions should be written as top-level chapters.
 
-Compact catalog:
-{build_compact_chunk_catalog(chunk_inventory)}
+## Project Scale
 
-{language_instruction}Choose a practical chapter count for onboarding.
-Favor a count that is:
-- Broad enough to cover the core architecture
-- Small enough to avoid thin or repetitive chapters
-- Usually between {MIN_AUTO_ABSTRACTIONS} and {MAX_AUTO_ABSTRACTIONS}
+- Source files: {files}
+- Semantic chunks: {chunks_n}
+- Top-level modules: {modules}
+- Entity-level chunks (classes/modules): {entities}
+- Function-level chunks: {stats["function_chunks"]}
 
-Return YAML in this format:
+{scale_hint}
+
+{language_instruction}## Requirements
+
+The chapter count MUST be:
+- Broad enough to cover EVERY major subsystem and architectural concept — a missing subsystem is the worst outcome
+- Scaled to the project's actual complexity — do NOT default to a small number out of caution
+- Between {MIN_AUTO_ABSTRACTIONS} and {MAX_AUTO_ABSTRACTIONS}
+
+## Compact Catalog
+
+{build_compact_chunk_catalog(chunk_inventory, max_chars=120000)}
+
+Return ONLY YAML in this exact format:
 
 ```yaml
-recommended_count: 6
-min_count: 4
-max_count: 8
+recommended_count: <integer between {MIN_AUTO_ABSTRACTIONS} and {MAX_AUTO_ABSTRACTIONS}>
 reason: |
-  The project has a few distinct subsystems and six chapters keeps them focused without over-splitting.
-```
-"""
+  <one sentence citing the project scale and a brief justification>
+```"""
 
 
 def _compact_refinement_prompt(
@@ -1536,8 +1603,6 @@ class CombineTutorial(Node):
                 chapter_content = chapters_content[i]  # Potentially translated content
                 if not chapter_content.endswith("\n\n"):
                     chapter_content += "\n\n"
-                # Keep fixed strings in English
-                chapter_content += f"---\n\nGenerated by [AI Codebase Knowledge Builder](https://github.com/The-Pocket/Tutorial-Codebase-Knowledge)"
 
                 # Store filename and corresponding content
                 chapter_files.append({"filename": filename, "content": chapter_content})
@@ -1545,9 +1610,6 @@ class CombineTutorial(Node):
                 print(
                     f"Warning: Mismatch between chapter order, abstractions, or content at index {i} (abstraction index {abstraction_index}). Skipping file generation for this entry."
                 )
-
-        # Add attribution to index content (using English fixed string)
-        index_content += f"\n\n---\n\nGenerated by [AI Codebase Knowledge Builder](https://github.com/The-Pocket/Tutorial-Codebase-Knowledge)"
 
         return {
             "output_path": output_path,
