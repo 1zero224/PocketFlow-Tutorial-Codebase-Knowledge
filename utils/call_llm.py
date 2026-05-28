@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from contextlib import contextmanager
+
 from google import genai
 import os
 import logging
@@ -5,6 +10,9 @@ import json
 import requests
 import threading
 import time
+import random
+import tempfile
+import ctypes
 from datetime import datetime
 
 # Configure logging
@@ -28,6 +36,179 @@ logger.addHandler(file_handler)
 cache_file = "llm_cache.json"
 _cache_lock = threading.RLock()
 _telemetry_lock = threading.Lock()
+
+
+def _positive_int_env(name, default):
+    try:
+        parsed = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _positive_float_env(name, default):
+    try:
+        parsed = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _llm_slot_dir():
+    configured = os.getenv("LLM_LOCK_DIR")
+    if configured:
+        return configured
+    return os.path.join(tempfile.gettempdir(), "pft_deep_llm_slots")
+
+
+def _cleanup_stale_llm_slots(lock_dir, stale_after):
+    now = time.time()
+    try:
+        names = os.listdir(lock_dir)
+    except FileNotFoundError:
+        return
+    for name in names:
+        if not name.endswith(".lock"):
+            continue
+        path = os.path.join(lock_dir, name)
+        try:
+            owner = _read_llm_slot_owner(path)
+            owner_pid = _parse_llm_slot_pid(owner)
+            if (
+                (owner_pid is not None and not _pid_is_alive(owner_pid))
+                or now - os.path.getmtime(path) > stale_after
+            ):
+                os.unlink(path)
+        except OSError:
+            pass
+
+
+def _read_llm_slot_owner(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def _parse_llm_slot_pid(owner):
+    try:
+        return int(str(owner).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _pid_is_alive(pid):
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        kernel32 = ctypes.windll.kernel32
+        process = kernel32.OpenProcess(0x1000, False, pid)
+        if process:
+            kernel32.CloseHandle(process)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+@contextmanager
+def _global_llm_slot():
+    """Limit concurrent LLM HTTP calls across batch worker processes."""
+    max_slots = _positive_int_env("LLM_GLOBAL_MAX_CONCURRENCY", 2)
+    if max_slots <= 0:
+        yield
+        return
+
+    lock_dir = _llm_slot_dir()
+    os.makedirs(lock_dir, exist_ok=True)
+    wait_timeout = _positive_float_env("LLM_SLOT_WAIT_TIMEOUT", 7200)
+    stale_after = _positive_float_env("LLM_SLOT_STALE_SECONDS", 7200)
+    owner = f"{os.getpid()}:{threading.get_ident()}:{random.getrandbits(32):08x}"
+    started = time.time()
+    acquired = None
+    next_cleanup = 0
+    next_notice = started + 30
+
+    while acquired is None:
+        now = time.time()
+        if now >= next_cleanup:
+            _cleanup_stale_llm_slots(lock_dir, stale_after)
+            next_cleanup = now + 30
+
+        for slot in range(max_slots):
+            candidate = os.path.join(lock_dir, f"slot-{slot}.lock")
+            try:
+                fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(owner)
+            acquired = candidate
+            break
+
+        if acquired is None:
+            if time.time() - started > wait_timeout:
+                raise TimeoutError(
+                    f"Timed out waiting for LLM concurrency slot after {wait_timeout:.0f}s"
+                )
+            if now >= next_notice:
+                print(
+                    f"  [LLM] waiting for global slot "
+                    f"({max_slots} concurrent calls allowed)...",
+                    flush=True,
+                )
+                next_notice = now + 60
+            time.sleep(0.5 + random.uniform(0, 0.5))
+
+    try:
+        yield
+    finally:
+        try:
+            os.unlink(acquired)
+        except OSError:
+            pass
+
+# ── Token usage tracking ──────────────────────────────────────────────
+
+
+@dataclass
+class UsageRecord:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+_usage_accumulator = UsageRecord()
+_usage_lock = threading.Lock()
+
+
+def _accumulate_usage(prompt_tokens: int, completion_tokens: int) -> None:
+    with _usage_lock:
+        _usage_accumulator.prompt_tokens += prompt_tokens
+        _usage_accumulator.completion_tokens += completion_tokens
+
+
+def get_usage_summary() -> dict:
+    """Return accumulated usage snapshot as a dict."""
+    with _usage_lock:
+        pt = _usage_accumulator.prompt_tokens
+        ct = _usage_accumulator.completion_tokens
+        return {
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": pt + ct,
+        }
+
+
+def reset_usage() -> None:
+    with _usage_lock:
+        _usage_accumulator.prompt_tokens = 0
+        _usage_accumulator.completion_tokens = 0
 
 
 def load_cache():
@@ -100,6 +281,8 @@ def _record_llm_telemetry(
     success,
     metadata=None,
     error=None,
+    prompt_tokens=None,
+    completion_tokens=None,
 ):
     if not _telemetry_enabled():
         return
@@ -116,6 +299,10 @@ def _record_llm_telemetry(
         "success": bool(success),
         "metadata": metadata or {},
     }
+    if prompt_tokens is not None:
+        event["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        event["completion_tokens"] = completion_tokens
     if error:
         event["error"] = str(error)
 
@@ -143,6 +330,8 @@ def _record_call_telemetry(
     success,
     metadata,
     error=None,
+    prompt_tokens=None,
+    completion_tokens=None,
 ):
     _record_llm_telemetry(
         stage=stage,
@@ -155,6 +344,8 @@ def _record_call_telemetry(
         success=success,
         metadata=metadata,
         error=error,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
@@ -168,7 +359,7 @@ def _call_context(prompt, stage, metadata):
     }
 
 
-def _record_context_telemetry(context, provider, model, cache_hit, success, error=None):
+def _record_context_telemetry(context, provider, model, cache_hit, success, error=None, prompt_tokens=None, completion_tokens=None):
     _record_call_telemetry(
         context["stage"],
         context["prompt"],
@@ -180,6 +371,8 @@ def _record_context_telemetry(context, provider, model, cache_hit, success, erro
         success,
         context["metadata"],
         error=error,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
@@ -191,7 +384,7 @@ def get_llm_provider():
     return provider
 
 
-def _call_llm_provider(prompt: str) -> str:
+def _call_llm_provider(prompt: str) -> tuple[str, int, int]:
     """
     Call an LLM provider based on environment variables.
     Environment variables:
@@ -224,31 +417,86 @@ def _call_llm_provider(prompt: str) -> str:
     if not base_url:
         raise ValueError(f"{base_url_var} environment variable is required")
 
-    # Append the endpoint to the base URL
-    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    # Append the API endpoint path; configurable via LLM_API_ENDPOINT env var
+    # Default: /v1/chat/completions. For OpenAI Responses API, set: /v1/responses
+    endpoint = os.getenv("LLM_API_ENDPOINT", "/v1/chat/completions")
+    url = f"{base_url.rstrip('/')}{endpoint}"
 
-    # Configure headers and payload based on provider
+    # Detect Responses API format (OpenAI /v1/responses) vs Chat Completions
+    is_responses_api = "/responses" in endpoint
+
+    # Configure headers
     headers = {
         "Content-Type": "application/json",
     }
     if api_key:  # Only add Authorization header if API key is provided
         headers["Authorization"] = f"Bearer {api_key}"
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-    }
+    # ── Build payload ──────────────────────────────────────────────────
+    if is_responses_api:
+        payload: dict = {
+            "model": model,
+            "input": prompt,
+        }
+        # Reasoning effort for OpenAI reasoning models
+        reasoning_effort_env = os.getenv(f"{provider}_REASONING_EFFORT")
+        if reasoning_effort_env:
+            payload["reasoning"] = {"effort": reasoning_effort_env}
+    else:
+        payload: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+        }
+        # DeepSeek V4 enables thinking mode by default; pass explicit params for clarity & control
+        if provider == "DEEPSEEK":
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = "high"
+            # temperature/top_p/presence_penalty/frequency_penalty are ignored in thinking mode
 
-    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "120"))
+    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "3600"))
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        response_json = response.json() # Log the response
-        logger.info("RESPONSE:\n%s", json.dumps(response_json, indent=2))
-        #logger.info(f"RESPONSE: {response.json()}")
+        with _global_llm_slot():
+            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+
+        raw_text = response.text
+        try:
+            response_json = response.json()
+            logger.info("RESPONSE:\n%s", json.dumps(response_json, indent=2))
+        except ValueError as exc:
+            if response.status_code >= 400:
+                raise Exception(
+                    f"HTTP error occurred: {response.status_code} {response.reason} "
+                    f"for url: {url} (Body: {raw_text[:500]})"
+                ) from exc
+            raise Exception(
+                f"Failed to parse response as JSON from {provider}. "
+                f"Body: {raw_text[:500]}"
+            ) from exc
+
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+
+        if is_responses_api:
+            # Parse Responses API format: output[type="message"].content[type="output_text"].text
+            text_parts = []
+            for item in response_json.get("output", []):
+                if item.get("type") == "message":
+                    for content in item.get("content", []):
+                        if content.get("type") == "output_text":
+                            text_parts.append(content.get("text", ""))
+            text = "".join(text_parts)
+            usage = response_json.get("usage", {})
+            pt = usage.get("input_tokens", 0) or 0
+            ct = usage.get("output_tokens", 0) or 0
+        else:
+            # Parse Chat Completions format
+            usage = response_json.get("usage", {})
+            pt = usage.get("prompt_tokens", 0) or 0
+            ct = usage.get("completion_tokens", 0) or 0
+            text = response_json["choices"][0]["message"]["content"]
+
+        return text, pt, ct
     except requests.exceptions.HTTPError as e:
         error_message = f"HTTP error occurred: {e}"
         try:
@@ -265,6 +513,30 @@ def _call_llm_provider(prompt: str) -> str:
         raise Exception(f"An error occurred while making the request to {provider}: {e}")
     except ValueError:
         raise Exception(f"Failed to parse response as JSON from {provider}. The server might have returned an invalid response.")
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    """Check if an exception from LLM call is transient (retryable)."""
+    msg = str(exc).lower()
+    transient_markers = [
+        "timeout", "timed out", "time-out",
+        "connection", "connection refused", "connection reset",
+        "server error", "service unavailable",
+        "503", "502", "504",
+        "429", "too many requests", "concurrency limit exceeded",
+        "rate limit", "too many requests", "429",
+        "overloaded", "temporary",
+        "remote end closed", "incomplete read",
+        "expecting value",       # Empty/broken JSON response
+        "parse response as json", # Empty/broken JSON response
+        "failed to parse",        # JSON parse failure
+        "bad request",           # May indicate upstream transient issue
+        "llm concurrency slot",
+    ]
+    for marker in transient_markers:
+        if marker in msg:
+            return True
+    return False
+
 
 # By default, we Google Gemini 2.5 pro, as it shows great performance for code understanding
 def call_llm(
@@ -292,23 +564,57 @@ def call_llm(
                 _record_context_telemetry(context, provider, model, True, True)
                 return response_text
 
-        response_text = _dispatch_llm_call(prompt, provider)
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+        last_error = None
 
-        # Log the response
-        logger.info(f"RESPONSE: {response_text}")
+        for attempt in range(1, max_retries + 1):
+            try:
+                dispatch_result = _dispatch_llm_call(prompt, provider)
+                if isinstance(dispatch_result, tuple):
+                    response_text, pt, ct = dispatch_result
+                else:
+                    response_text, pt, ct = dispatch_result, 0, 0
 
-        # The lock keeps concurrent batch workers from overwriting cache updates.
-        if use_cache:
-            _save_cached_response(prompt, response_text)
+                # Log the response
+                logger.info(f"RESPONSE: {response_text}")
 
-        _record_context_telemetry(context, provider, model, False, True)
-        return response_text
+                # The lock keeps concurrent batch workers from overwriting cache updates.
+                if use_cache:
+                    _save_cached_response(prompt, response_text)
+
+                _accumulate_usage(pt, ct)
+                _record_context_telemetry(context, provider, model, False, True,
+                                          prompt_tokens=pt, completion_tokens=ct)
+                return response_text
+
+            except Exception as exc:
+                last_error = exc
+                if attempt < max_retries and _is_transient_llm_error(exc):
+                    delay = min(10 * (2 ** (attempt - 1)), 120)  # 10s, 20s, 40s, 80s, cap 120s
+                    jitter = random.uniform(0, delay * 0.3)
+                    wait = delay + jitter
+                    print(
+                        f"  [LLM:{context['stage'] or 'unspecified'}] "
+                        f"attempt {attempt}/{max_retries} failed; retrying in {wait:.1f}s: {exc}",
+                        flush=True,
+                    )
+                    logger.warning(
+                        f"LLM call attempt {attempt}/{max_retries} failed (transient), "
+                        f"retrying in {wait:.1f}s: {exc}"
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+
+        # All retries exhausted
+        raise last_error
+
     except Exception as exc:
         _record_context_telemetry(context, provider, model, False, False, error=exc)
         raise
 
 
-def _call_llm_gemini(prompt: str) -> str:
+def _call_llm_gemini(prompt: str) -> tuple[str, int, int]:
     if os.getenv("GEMINI_PROJECT_ID"):
         client = genai.Client(
             vertexai=True,
@@ -324,7 +630,11 @@ def _call_llm_gemini(prompt: str) -> str:
         model=model,
         contents=[prompt]
     )
-    return response.text
+    pt = ct = 0
+    if response.usage_metadata:
+        pt = response.usage_metadata.prompt_token_count or 0
+        ct = response.usage_metadata.candidates_token_count or 0
+    return response.text, pt, ct
 
 if __name__ == "__main__":
     test_prompt = "Hello, how are you?"

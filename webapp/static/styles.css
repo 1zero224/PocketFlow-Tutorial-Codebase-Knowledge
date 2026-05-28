@@ -1,0 +1,448 @@
+:root {
+  --bg: #0f172a;
+  --panel: rgba(15, 23, 42, 0.82);
+  --panel-strong: #111c34;
+  --border: rgba(148, 163, 184, 0.18);
+  --text: #f8fafc;
+  --muted: #cbd5e1;
+  --subtle: #94a3b8;
+  --accent: #22c55e;
+  --accent-strong: #16a34a;
+  --accent-soft: rgba(34, 197, 94, 0.16);
+  --danger: #fb7185;
+  --warning: #fbbf24;
+  --shadow: 0 24px 80px rgba(2, 6, 23, 0.4);
+  --radius: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(34, 197, 94, 0.14), transparent 28%),
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 24%),
+    linear-gradient(160deg, #020617 0%, #0f172a 45%, #111827 100%);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.page-shell {
+  width: min(1440px, calc(100vw - 32px));
+  margin: 24px auto 48px;
+}
+
+.hero,
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 1.65fr 0.95fr;
+  gap: 24px;
+  padding: 28px;
+  background:
+    linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.9)),
+    linear-gradient(90deg, rgba(34, 197, 94, 0.18), transparent);
+}
+
+.hero-copy h1,
+.panel-heading h2 {
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.hero-copy h1 {
+  margin-top: 8px;
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 1.04;
+}
+
+.eyebrow,
+.panel-kicker {
+  margin: 0;
+  font-family: "Fira Code", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #86efac;
+  font-size: 0.84rem;
+}
+
+.hero-text {
+  max-width: 52ch;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 1.02rem;
+  line-height: 1.7;
+}
+
+.hero-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 20px;
+  border-radius: calc(var(--radius) - 8px);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(17, 28, 52, 0.95));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.metric {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(30, 41, 59, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.metric-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--subtle);
+  font-size: 0.88rem;
+}
+
+.metric strong {
+  font-size: 1.12rem;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 0.95fr 1.1fr;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.panel {
+  padding: 24px;
+  background: var(--panel);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.field,
+.field-row {
+  display: grid;
+  gap: 10px;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.input-with-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.field span {
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
+.field-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.field-row.triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  padding: 13px 15px;
+  color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  background: rgba(15, 23, 42, 0.88);
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: rgba(34, 197, 94, 0.8);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
+}
+
+textarea {
+  min-height: 136px;
+  resize: vertical;
+}
+
+.checkbox-field {
+  align-content: start;
+}
+
+.checkbox-field input {
+  width: 22px;
+  height: 22px;
+  margin-top: 8px;
+}
+
+.primary-button,
+.secondary-button,
+.ghost-button {
+  border: 0;
+  border-radius: 18px;
+  padding: 12px 18px;
+  transition: transform 180ms ease, background 180ms ease, opacity 180ms ease;
+}
+
+.primary-button {
+  color: #04130a;
+  background: linear-gradient(135deg, #4ade80, #22c55e);
+  font-weight: 700;
+}
+
+.secondary-button {
+  color: var(--text);
+  background: rgba(51, 65, 85, 0.95);
+}
+
+.field-action-button {
+  min-width: 88px;
+  white-space: nowrap;
+}
+
+.ghost-button {
+  color: var(--muted);
+  background: rgba(30, 41, 59, 0.56);
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.ghost-button:hover {
+  transform: translateY(-1px);
+}
+
+.inline-actions,
+.form-footer,
+.queue-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.queue-stats {
+  flex-wrap: wrap;
+  color: var(--subtle);
+  font-size: 0.94rem;
+}
+
+.path-pill {
+  margin: 14px 0 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(34, 197, 94, 0.1);
+  color: #dcfce7;
+  word-break: break-all;
+}
+
+.task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.task-card {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.task-title {
+  display: block;
+  margin-bottom: 6px;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+.task-meta,
+.task-path,
+.task-result,
+.task-log {
+  color: var(--subtle);
+  font-size: 0.92rem;
+}
+
+.task-path,
+.path-pill,
+.task-log {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+.task-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status-pending {
+  color: #fde68a;
+  background: rgba(251, 191, 36, 0.16);
+}
+
+.status-running {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.16);
+}
+
+.status-completed {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.16);
+}
+
+.status-failed {
+  color: #fda4af;
+  background: rgba(244, 63, 94, 0.16);
+}
+
+.task-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.helper-text {
+  margin: 0;
+  color: var(--subtle);
+  line-height: 1.7;
+}
+
+.progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+  transition: width 0.5s ease;
+}
+
+.progress-label {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-family: "Fira Code", monospace;
+  min-width: 10ch;
+  text-align: right;
+}
+
+.task-log {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.68);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.form-message {
+  min-height: 20px;
+  margin: 0;
+  color: var(--muted);
+}
+
+.empty-state {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+  color: var(--subtle);
+}
+
+@media (max-width: 1024px) {
+  .hero,
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .page-shell {
+    width: min(100vw - 18px, 100%);
+    margin-top: 10px;
+  }
+
+  .panel,
+  .hero {
+    padding: 18px;
+  }
+
+  .field-row,
+  .field-row.triple,
+  .input-with-button {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-heading,
+  .inline-actions,
+  .form-footer,
+  .task-card-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

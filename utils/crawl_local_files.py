@@ -140,6 +140,7 @@ if __name__ == "__main__":
             ".git/*",
             "docs/*",
             "output/*",
+	            "pf_guide/*",
         },
     )
     print(f"Found {len(files_data['files'])} files:")

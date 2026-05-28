@@ -46,6 +46,24 @@ class MainDefaultsTests(unittest.TestCase):
                 main.main()
 
         self.assertEqual(captured_shared["language"], "Chinese")
+        self.assertEqual(captured_shared["max_abstraction_num"], "auto")
+
+    def test_cli_accepts_manual_max_abstractions_override(self):
+        captured_shared = {}
+
+        class CapturingFlow:
+            def run(self, shared):
+                captured_shared.update(shared)
+
+        with patch.object(
+            sys,
+            "argv",
+            ["main.py", "--dir", "sample", "--max-abstractions", "7"],
+        ):
+            with patch("main.create_tutorial_flow", return_value=CapturingFlow()):
+                main.main()
+
+        self.assertEqual(captured_shared["max_abstraction_num"], 7)
 
     @patch("nodes.build_chunk_inventory")
     def test_identify_abstractions_defaults_language_to_chinese(self, mock_build_chunk_inventory):
@@ -74,6 +92,7 @@ class MainDefaultsTests(unittest.TestCase):
         prep_res = nodes.IdentifyAbstractions().prep(shared)
 
         self.assertEqual(prep_res["language"], "Chinese")
+        self.assertEqual(prep_res["max_abstraction_num"], "auto")
 
 
 if __name__ == "__main__":
